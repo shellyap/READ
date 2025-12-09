@@ -1,0 +1,1166 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>R.E.A.D. – Ranau English Analytics Dashboard</title>
+    
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    
+    <!-- React & ReactDOM -->
+    <script crossorigin src="https://unpkg.com/react@18/umd/react.development.js"></script>
+    <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+    
+    <!-- Prop Types (Required for Recharts UMD) -->
+    <script src="https://unpkg.com/prop-types/prop-types.min.js"></script>
+    
+    <!-- Recharts (Fixed Version for UMD Stability) -->
+    <script src="https://unpkg.com/recharts@2.12.7/umd/Recharts.js"></script>
+
+    <!-- Babel -->
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    
+    <!-- SheetJS (XLSX) for Excel Export -->
+    <script src="https://cdn.sheetjs.com/xlsx-latest/package/dist/xlsx.full.min.js"></script>
+
+    <!-- Firebase SDK Imports (MUST USE LATEST VERSION FROM CDN) -->
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+        import { getAuth, signInWithCustomToken, onAuthStateChanged, signInAnonymously } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { getFirestore, doc, setDoc, onSnapshot, collection, query, addDoc, deleteDoc, updateDoc, writeBatch, where, getDocs, getDoc, setLogLevel } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+
+        // VITAL: Configuration provided by the user is injected here for deployment
+        const userFirebaseConfig = {
+            apiKey: "AIzaSyBYqhcV2903lEMKVTzNF5T2Hb1lRorMp3o",
+            authDomain: "read-c18f6.firebaseapp.com",
+            projectId: "read-c18f6",
+            storageBucket: "read-c18f6.firebasestorage.app",
+            messagingSenderId: "755609414492",
+            appId: "1:755609414492:web:4728c5725bc291246a6f99",
+            measurementId: "G-W6WME9XX5K"
+        };
+
+        // Environment variables (Mandatory usage for Canvas/GitHub deployment context)
+        const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-read-app';
+        const initialAuthToken = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null;
+
+        // Initialize Firebase
+        if (userFirebaseConfig && Object.keys(userFirebaseConfig).length) {
+            window.firebaseApp = initializeApp(userFirebaseConfig);
+            window.db = getFirestore(window.firebaseApp);
+            window.auth = getAuth(window.firebaseApp);
+            
+            // Expose initialization details and SDK functions to the global scope 
+            window.firebase = {
+                // Auth
+                signInWithCustomToken: signInWithCustomToken,
+                onAuthStateChanged: onAuthStateChanged, 
+                signInAnonymously: signInAnonymously,
+
+                // Firestore
+                setDoc: setDoc,
+                onSnapshot: onSnapshot,
+                collection: collection,
+                doc: doc,
+                addDoc: addDoc,
+                deleteDoc: deleteDoc,
+                updateDoc: updateDoc,
+                writeBatch: writeBatch,
+                getDocs: getDocs,
+                getDoc: getDoc, // Added for role check
+            };
+
+            // Expose initialization details globally for React component
+            window.appId = appId;
+            window.initialAuthToken = initialAuthToken;
+        } else {
+            console.error("Firebase configuration is missing or invalid.");
+        }
+    </script>
+
+    <style>
+        body { font-family: 'Inter', sans-serif; background-color: #f3f4f6; }
+        /* Hide scrollbar for Chrome, Safari and Opera */
+        .hide-scrollbar::-webkit-scrollbar { display: none; }
+        /* Hide scrollbar for IE and Edge */
+        .hide-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
+        .animate-fade-in { animation: fadeIn 0.3s ease-in-out; }
+        @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+    </style>
+</head>
+<body>
+    <div id="root"></div>
+
+    <script type="text/babel">
+        // Safe global access
+        const { useState, useEffect, useMemo, useCallback } = React;
+        
+        // RECHARTS SAFE ACCESS
+        const RechartsObj = window.Recharts || window.Recharts.default || {};
+        const { 
+            BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, 
+            PieChart, Pie, Cell, LineChart, Line, Label, LabelList 
+        } = RechartsObj;
+        
+        // --- GRADES AND COLORS ---
+        const grades = ['A+', 'A', 'A-', 'B+', 'B', 'C+', 'C', 'D', 'E', 'G', 'TH'];
+        // GP Points (Lower is better: 0.00 is A+, 9.00 is G/TH)
+        const POINTS = {'A+':0, 'A':1, 'A-':2, 'B+':3, 'B':4, 'C+':5, 'C':6, 'D':7, 'E':8, 'G':9, 'TH':9};
+        
+        const COLORS = {
+            cemerlang: '#10B981', // Green (A+, A, A-)
+            kepujian: '#3B82F6',  // Blue (B+, B, C+, C)
+            lulus: '#F59E0B',     // Yellow/Orange (D, E)
+            gagal: '#EF4444',     // Red (G)
+            th: '#9CA3AF'         // Gray (TH)
+        };
+
+        const PIE_COLORS = [COLORS.cemerlang, COLORS.kepujian, COLORS.lulus, COLORS.gagal];
+        const GRADE_CATEGORIES = {
+            'Cemerlang': ['A+', 'A', 'A-'],
+            'Kepujian': ['B+', 'B', 'C+', 'C'],
+            'Lulus': ['D', 'E'],
+            'Gagal': ['G'],
+            'Tidak Hadir': ['TH'] // Add TH for completeness
+        };
+
+        // --- INLINE ICONS (Lucide) ---
+        const Icon = ({ children, size = 18, className = "" }) => (
+            <svg xmlns="http://www.w3.org/2000/svg" width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}>
+                {children}
+            </svg>
+        );
+
+        const LayoutDashboard = (props) => <Icon {...props}><rect width="7" height="9" x="3" y="3" rx="1" /><rect width="7" height="5" x="14" y="3" rx="1" /><rect width="7" height="9" x="14" y="12" rx="1" /><rect width="7" height="5" x="3" y="16" rx="1" /></Icon>;
+        const BarChart3 = (props) => <Icon {...props}><path d="M3 3v18h18"/><path d="M18 17V9"/><path d="M13 17V5"/><path d="M8 17v-3"/></Icon>;
+        const Users = (props) => <Icon {...props}><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></Icon>;
+        const FileSpreadsheet = (props) => <Icon {...props}><path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"/><path d="M14 2v4a2 2 0 0 0 2 2h4"/><path d="M8 13h2"/><path d="M8 17h2"/><path d="M14 13h2"/><path d="M14 17h2"/></Icon>;
+        const LogOut = (props) => <Icon {...props}><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" x2="9" y1="12" y2="12"/></Icon>;
+        const PlusCircle = (props) => <Icon {...props}><circle cx="12" cy="12" r="10"/><path d="M8 12h8"/><path d="M12 8v8"/></Icon>;
+        const Download = (props) => <Icon {...props}><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" x2="12" y1="15" y2="3"/></Icon>;
+        const TrendingUp = (props) => <Icon {...props}><polyline points="22 7 13.5 15.5 8.5 10.5 2 17"/><polyline points="16 7 22 7 22 13"/></Icon>;
+        const TrendingDown = (props) => <Icon {...props}><polyline points="22 17 13.5 8.5 8.5 13.5 2 7"/><polyline points="16 17 22 17 22 11"/></Icon>;
+        const BadgeCheck = (props) => <Icon {...props}><path d="M3.85 8.62a4 4 0 0 1 4.78-4.77 4 4 0 0 1 6.74 0 4 4 0 0 1 4.78 4.78 4 4 0 0 1 0 6.74 4 4 0 0 1-4.78 4.78 4 4 0 0 1-6.74 0 4 4 0 0 1-4.78-4.78 4 4 0 0 1 0-6.74Z"/><path d="m9 12 2 2 4-4"/></Icon>;
+        const X = (props) => <Icon {...props}><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></Icon>;
+        const Zap = (props) => <Icon {...props}><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></Icon>;
+        const FileText = (props) => <Icon {...props}><path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"/><path d="M14 2v4a2 2 0 0 0 2 2h4"/><path d="M10 9H8"/><path d="M16 13H8"/><path d="M16 17H8"/></Icon>;
+        const Settings = (props) => <Icon {...props}><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 0 2.73l-.15.1a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l-.22-.38a2 2 0 0 0-.73-2.73l-.15-.1a2 2 0 0 1 0-2.73l.15-.1a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/></Icon>;
+        const HeartHandshake = (props) => <Icon {...props}><path d="M19 14c1.49-1.28 3.6-2.34 4.58-3.26a6 6 0 0 0-9.33-7.65L12 5.5l-2.25-2.41a6 6 0 0 0-9.33 7.65c.98.92 3.09 1.98 4.58 3.26"/><path d="M12 21.35V16"/><path d="M6 16v-2c0-.55.45-1 1-1h10c.55 0 1 .45 1 1v2"/></Icon>;
+        const Edit3 = (props) => <Icon {...props}><path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z"/></Icon>;
+
+
+        // Mock user list (used only for initial setup/role determination before auth is ready)
+        const MOCK_USERS = [];
+
+        // --- Mock Data Generators (Simulating your CSVs) ---
+        const GENERATE_FROM_CSV_SNIPPETS = () => {
+            const rawStudentData = [
+                { name: "FITRAH ALIEF BIN OSMAN", mark: 40, grade: "E", class: "ABU DAUD", school: "SEKOLAH MENENGAH KEBANGSAAN AGAMA MOHAMAD ALI RANAU" },
+                { name: "NUR ERYNA BINTI AZMIRUN", mark: 67, grade: "B+", class: "ABU DAUD", school: "SEKOLAH MENENGAH KEBANGSAAN AGAMA MOHAMAD ALI RANAU" },
+                { name: "MUHAMMAD ALIF NAUFAL BIN ISMAIL", mark: 31, grade: "G", class: "ABU DAUD", school: "SEKOLAH MENENGAH KEBANGSAAN AGAMA MOHAMAD ALI RANAU" },
+                { name: "MOHAMMAD HAIQAL IRFAN BIN MOHD SALIM", mark: 26, grade: "G", class: "ABU DAUD", school: "SEKOLAH MENENGAH KEBANGSAAN AGAMA MOHAMAD ALI RANAU" },
+                { name: "MUHAMMAD SYAFIQ AIMAN BIN IBRAHIM", mark: 70, grade: "A-", class: "ABU DAUD", school: "SEKOLAH MENENGAH KEBANGSAAN AGAMA MOHAMAD ALI RANAU" },
+                { name: "PUTRI ALIA AMANDA BINTI BUSTAN", mark: 45, grade: "D", class: "ABU DAUD", school: "SEKOLAH MENENGAH KEBANGSAAN AGAMA MOHAMAD ALI RANAU" },
+                { name: "SYAFIQ IDHAM TAN", mark: 49, grade: "D", class: "ABU DAUD", school: "SEKOLAH MENENGAH KEBANGSAAN AGAMA MOHAMAD ALI RANAU" },
+                { name: "MUHAMMAD HAFIY WAJDI BIN RAZALI", mark: 53, grade: "C", class: "ABU DAUD", school: "SEKOLAH MENENGAH KEBANGSAAN AGAMA MOHAMAD ALI RANAU" },
+                { name: "EMMANINA BINTI JUHAMIN", mark: 64, grade: "B", class: "UIM", school: "SMA AL-IRSYADIAH MARAKAU RANAU" },
+                { name: "FATIN FARADIYAH BINTI ZULQURNAIN", mark: 77, grade: "A-", class: "UIM", school: "SMA AL-IRSYADIAH MARAKAU RANAU" },
+                { name: "MARSHA QISTINA BINTI IMAN SUBHAN BARMAWIJAYA", mark: 68, grade: "B+", class: "UIM", school: "SMA AL-IRSYADIAH MARAKAU RANAU" },
+                { name: "MOHAMMAD IQWAN AQMAR BIN HAMZAH", mark: 56, grade: "C+", class: "UIM", school: "SMA AL-IRSYADIAH MARAKAU RANAU" },
+                { name: "MUHAMMAD FARHAN BIN MOHD ABDUL HADI", mark: 57, grade: "C+", class: "UIM", school: "SMA AL-IRSYADIAH MARAKAU RANAU" },
+                { name: "MUHAMMAD MUKHLIS BIN ROHININ", mark: 76, grade: "A-", class: "UIM", school: "SMA AL-IRSYADIAH MARAKAU RANAU" },
+                { name: "MUMTAZ SAADAH AL-ADAWIYYAH BINTI RISMAN", mark: 53, grade: "C", class: "UIM", school: "SMA AL-IRSYADIAH MARAKAU RANAU" },
+                { name: "NUR SOFEA BINTI JALAIS @ RAZALI", mark: 55, grade: "C+", class: "UIM", school: "SMA AL-IRSYADIAH MARAKAU RANAU" },
+                { name: "NUR SYAHIDAH ADILAH BINTI JULILIAN", mark: 60, grade: "B", class: "UIM", school: "SMA AL-IRSYADIAH MARAKAU RANAU" }
+            ];
+
+            const schools = [
+                { id: "XRA5401", name: "SEKOLAH MENENGAH KEBANGSAAN AGAMA MOHAMAD ALI RANAU" },
+                { id: "XEA5402", name: "SEKOLAH MENENGAH KEBANGSAAN BUNDU TUHAN" },
+                { id: "XEA5406", name: "SEKOLAH MENENGAH KEBANGSAAN KEMBURONGOH RANAU" },
+                { id: "XEA5403", name: "SEKOLAH MENENGAH KEBANGSAAN KUNDASANG" },
+                { id: "XEA5404", name: "SEKOLAH MENENGAH KEBANGSAAN LOHAN" },
+                 {id: "SMA001", name: "SMA AL-IRSYADIAH MARAKAU RANAU"}
+            ];
+            
+            const randomGrade = () => {
+                const r = Math.random();
+                if(r > 0.9) return 'A+';
+                if(r > 0.8) return 'A';
+                if(r > 0.7) return 'A-';
+                if(r > 0.6) return 'B+';
+                if(r > 0.5) return 'B';
+                if(r > 0.4) return 'C+';
+                if(r > 0.3) return 'C';
+                if(r > 0.2) return 'D';
+                if(r > 0.1) return 'E';
+                return 'G';
+            };
+
+            const generatedStudents = [...rawStudentData];
+
+            schools.forEach(s => {
+                if(!rawStudentData.find(d => d.school === s.name)) {
+                     for(let i=0; i<30; i++) {
+                         generatedStudents.push({
+                             name: `Student ${i+1} - ${s.id}`,
+                             mark: Math.floor(Math.random() * 100),
+                             grade: randomGrade(),
+                             class: 'CLASS 1',
+                             school: s.name
+                         });
+                     }
+                }
+            });
+            
+            const summary = [];
+            const processedStudents = generatedStudents.map((s, i) => ({
+                id: i+1,
+                name: s.name,
+                school: s.school,
+                className: s.class,
+                grade: s.grade,
+                mark: s.mark
+            }));
+
+            const grouped = {};
+            processedStudents.forEach(s => {
+                const key = `${s.school}|${s.class}`;
+                if(!grouped[key]) {
+                    grouped[key] = {
+                        schoolId: schools.find(sch => sch.name === s.school)?.id || 'UNKNOWN',
+                        schoolName: s.school,
+                        className: s.class,
+                        totalCandidates: 0,
+                        grades: grades.reduce((acc, g) => ({ ...acc, [g]: 0 }), {})
+                    };
+                }
+                grouped[key].totalCandidates++;
+                if(grouped[key].grades[s.grade] !== undefined) {
+                    grouped[key].grades[s.grade]++;
+                }
+            });
+
+            Object.values(grouped).forEach(g => {
+                let sum = 0;
+                let count = 0;
+                Object.entries(g.grades).forEach(([grd, qty]) => {
+                    sum += (qty * (POINTS[grd] || 9));
+                    if(grd !== 'TH') count += qty;
+                });
+                g.gp = count === 0 ? 9.00 : parseFloat((sum/count).toFixed(2));
+                summary.push(g);
+            });
+
+            return { summary, students: processedStudents };
+        };
+        
+        const INITIAL_SOURCES = [
+            { id: 1, name: 'PPSA T4 2025 (Latest)', previousGP: 4.8, ...GENERATE_FROM_CSV_SNIPPETS(), uid: 'admin_uid' },
+            { id: 2, name: 'PPT T4 2024 (Previous)', previousGP: 5.5, ...GENERATE_FROM_CSV_SNIPPETS(), uid: 'admin_uid' }
+        ];
+        
+        // --- Firebase Utilities ---
+        const getDb = () => window.db;
+        const getAuth = () => window.auth;
+        const getAppId = () => window.appId;
+        
+        const getGlobalDataRef = (collectionName) => {
+            const db = getDb();
+            const appId = getAppId();
+            return window.firebase.collection(db, `artifacts/${appId}/public/data/${collectionName}`);
+        };
+
+        const getUserDataRef = (collectionName, userId) => {
+            const db = getDb();
+            const appId = getAppId();
+            if (!userId) {
+                console.error("Cannot get user data ref: userId is missing.");
+                return null;
+            }
+            return window.firebase.collection(db, `artifacts/${appId}/users/${userId}/${collectionName}`);
+        };
+
+        const calculateWeightedGP = (rows) => {
+            const totalCandidates = rows.reduce((acc, row) => acc + row.totalCandidates, 0);
+            
+            const validRows = rows.filter(row => row.grades && typeof row.grades === 'object');
+
+            if(rows[0] && rows[0].gp !== undefined) {
+                 const sumGP = rows.reduce((acc, row) => acc + (row.gp * row.totalCandidates), 0);
+                 return totalCandidates ? parseFloat((sumGP / totalCandidates).toFixed(2)) : 9.00;
+            }
+
+            let sumGP = 0;
+            let countGP = 0; 
+
+            validRows.forEach(row => {
+                 Object.entries(row.grades).forEach(([grd, qty]) => {
+                    sum += (qty * (POINTS[grd] || 9)); 
+                    if(grd !== 'TH') countGP += qty;
+                });
+            });
+
+            return countGP ? parseFloat((sumGP / countGP).toFixed(2)) : 9.00;
+        };
+
+
+        // --- CORE UI COMPONENTS (Moved to top level) ---
+
+        const Badge = ({ children, color }) => (
+            <span className={`px-2 py-1 rounded text-xs font-semibold ${color}`}>
+                {children}
+            </span>
+        );
+
+        const KpiCard = ({ title, value, subtext, color = "bg-white", icon }) => (
+            <div className={`${color} p-4 rounded-xl shadow-sm border border-gray-100 flex flex-col justify-between`}>
+                <div className="flex justify-between items-start">
+                    <div>
+                        <p className="text-xs font-semibold uppercase tracking-wider text-gray-500">{title}</p>
+                        <h3 className="text-2xl font-bold text-gray-800 mt-1">{value}</h3>
+                    </div>
+                    {icon && <div className="p-2 bg-gray-50 rounded-lg">{icon}</div>}
+                </div>
+                {subtext && <p className="text-xs text-gray-500 mt-2">{subtext}</p>}
+            </div>
+        );
+        
+        const SwotCard = ({ title, category, color, items, onAdd, onUpdate, onDelete, canEdit }) => (
+            <div className={`p-4 rounded-xl border ${color} h-full flex flex-col`}>
+                <h4 className="font-bold text-lg uppercase tracking-wider mb-3">{title}</h4>
+                
+                <div className="space-y-3 flex-1 overflow-y-auto pr-2 hide-scrollbar">
+                    {(items || []).map(item => (
+                        <div key={item.id} className="flex items-start gap-2 group/item">
+                            <span className="pt-2 text-sm font-semibold">{items.findIndex(i => i.id === item.id) + 1}.</span>
+                            <textarea
+                                className="flex-1 w-full bg-white/50 border-gray-300 rounded-md p-2 text-sm focus:ring-blue-500 focus:border-blue-500 resize-none"
+                                rows="2"
+                                value={item.text}
+                                placeholder={canEdit ? `Enter ${title.toLowerCase()} item...` : "Read-only"}
+                                onChange={(e) => canEdit && onUpdate(category, item.id, e.target.value)}
+                                onBlur={(e) => {
+                                    if (canEdit && e.target.value.trim() === "") {
+                                        onDelete(category, item.id);
+                                    }
+                                }}
+                                disabled={!canEdit}
+                            />
+                            {canEdit && (
+                                <button 
+                                    onClick={() => onDelete(category, item.id)} 
+                                    className="mt-2 text-red-400 hover:text-red-600 transition opacity-100" 
+                                    title="Remove item"
+                                >
+                                    <X size={14} />
+                                </button>
+                            )}
+                        </div>
+                    ))}
+                </div>
+
+                {canEdit && (
+                    <button 
+                        onClick={() => onAdd(category)} 
+                        className="mt-4 flex items-center justify-center w-full px-3 py-2 text-xs border border-dashed rounded-md hover:bg-white/50 transition"
+                    >
+                        <PlusCircle size={14} className="mr-2" /> Add {title} Item
+                    </button>
+                )}
+            </div>
+        );
+
+        const InterventionCard = ({ title, category, color, items, onAdd, onUpdate, onDelete, studentList, onDownload }) => (
+            <div className={`p-4 rounded-xl border ${color} h-full flex flex-col`}>
+                <div className="flex justify-between items-start mb-3">
+                    <div>
+                         <h4 className="font-bold text-lg uppercase tracking-wider">{title}</h4>
+                         <p className="text-xs opacity-75">{studentList.length} Students</p>
+                    </div>
+                    <button onClick={() => onDownload(category)} className="text-gray-500 hover:text-gray-700" title="Download List">
+                        <Download size={16} />
+                    </button>
+                </div>
+                
+                {/* Student List Preview */}
+                <div className="mb-4 max-h-32 overflow-y-auto pr-2 hide-scrollbar bg-white/50 rounded-md p-2 text-xs">
+                    <p className="font-semibold mb-1 text-gray-600">Students:</p>
+                    {studentList.length > 0 ? (
+                        <ul className="list-disc list-inside space-y-0.5">
+                            {studentList.slice(0, 5).map((s, i) => (
+                                <li key={i} className="truncate">{s.name} ({s.grade})</li>
+                            ))}
+                            {studentList.length > 5 && (
+                                <li className="italic text-gray-400">...and {studentList.length - 5} more.</li>
+                            )}
+                        </ul>
+                    ) : (
+                        <p className="italic text-gray-400">No students in this group.</p>
+                    )}
+                </div>
+
+                <div className="flex-1 overflow-y-auto pr-2 hide-scrollbar space-y-2">
+                    <p className="font-semibold text-xs text-gray-600">Interventions:</p>
+                    {(items || []).map(item => (
+                        <div key={item.id} className="flex items-start gap-2 group/item">
+                            <span className="pt-2 text-xs font-semibold">{items.findIndex(i => i.id === item.id) + 1}.</span>
+                            <textarea
+                                className="flex-1 w-full bg-white/80 border-gray-300 rounded-md p-2 text-sm focus:ring-blue-500 focus:border-blue-500 resize-none"
+                                rows="2"
+                                value={item.text}
+                                placeholder={`Enter intervention...`}
+                                onChange={(e) => onUpdate(category, item.id, e.target.value)}
+                                onBlur={(e) => {
+                                    if (e.target.value.trim() === "") {
+                                        onDelete(category, item.id);
+                                    }
+                                }}
+                            />
+                            <button 
+                                onClick={() => onDelete(category, item.id)} 
+                                className="mt-2 text-red-400 hover:text-red-600 transition opacity-100" 
+                                title="Remove item"
+                            >
+                                <X size={14} />
+                            </button>
+                        </div>
+                    ))}
+                </div>
+
+                <button 
+                    onClick={() => onAdd(category)} 
+                    className="mt-3 flex items-center justify-center w-full px-3 py-2 text-xs border border-dashed border-gray-400 rounded-md hover:bg-white/50 transition"
+                >
+                    <PlusCircle size={14} className="mr-2" /> Add Intervention
+                </button>
+            </div>
+        );
+        
+        const AddSourceModal = ({ onClose, onAddSource, existingSources }) => {
+            const [name, setName] = useState('');
+            const [url, setUrl] = useState('');
+            const [isLoading, setIsLoading] = useState(false);
+            const [error, setError] = useState('');
+
+            const handleSubmit = async (e) => {
+                e.preventDefault();
+                setError('');
+                if (!name.trim() || !url.trim()) {
+                    return setError('Source Name and URL are required.');
+                }
+                if (existingSources.some(s => s.name.toLowerCase() === name.trim().toLowerCase())) {
+                    return setError('Source name already exists.');
+                }
+
+                setIsLoading(true);
+                try {
+                    await onAddSource(name.trim(), url.trim());
+                    onClose();
+                } catch (err) {
+                    console.error("Error adding source:", err);
+                    setError('Failed to add source: Check console for details.');
+                } finally {
+                    setIsLoading(false);
+                }
+            };
+
+            return (
+                <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+                    <div className="bg-white p-6 rounded-xl shadow-2xl w-full max-w-md animate-fade-in">
+                        <h3 className="text-xl font-bold text-gray-800 mb-4 flex justify-between items-center">
+                            Add New Data Source
+                            <button onClick={onClose} className="text-gray-400 hover:text-gray-800"><X size={20} /></button>
+                        </h3>
+                        <p className="text-sm text-gray-600 mb-4">
+                            Enter the name for the new exam/data source and the CSV/Google Sheet link. 
+                        </p>
+                        
+                        <form onSubmit={handleSubmit} className="space-y-4">
+                            <div>
+                                <label className="block text-sm font-medium text-gray-700">Source Name (e.g., PPSA T1 2026)</label>
+                                <input type="text" value={name} onChange={e => setName(e.target.value)} 
+                                    className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 p-2 border" 
+                                    disabled={isLoading}
+                                />
+                            </div>
+                            <div>
+                                <label className="block text-sm font-medium text-gray-700">Google Sheet CSV Export Link</label>
+                                <input type="url" value={url} onChange={e => setUrl(e.target.value)} 
+                                    className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 p-2 border" 
+                                    placeholder="e.g., docs.google.com/spreadsheets/d/..."
+                                    disabled={isLoading}
+                                />
+                                 <p className="text-xs text-red-500 mt-1">Note: Data processing is **mocked** (uses internal mock data generator), but the input fields are functional.</p>
+                            </div>
+                            {error && <p className="text-red-500 text-sm font-semibold">{error}</p>}
+
+                            <button type="submit" 
+                                className={`w-full py-2 rounded-md transition flex items-center justify-center ${isLoading ? 'bg-gray-400 text-gray-600 cursor-not-allowed' : 'bg-blue-600 text-white hover:bg-blue-700'}`}
+                                disabled={isLoading}
+                            >
+                                {isLoading ? (
+                                    <>
+                                        <svg className="animate-spin -ml-1 mr-3 h-5 w-5 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg>
+                                        Loading Data...
+                                    </>
+                                ) : 'Add Source'}
+                            </button>
+                        </form>
+                    </div>
+                </div>
+            );
+        };
+        
+        const RenameSourceModal = ({ source, onClose, onRenameSource, existingSources }) => {
+            const [newName, setNewName] = useState(source.name);
+            const [isLoading, setIsLoading] = useState(false);
+            const [error, setError] = useState('');
+
+            const handleSubmit = async (e) => {
+                e.preventDefault();
+                setError('');
+                if (!newName.trim()) {
+                    return setError('Source Name cannot be empty.');
+                }
+                
+                const sanitizedNewName = newName.trim();
+
+                if (sanitizedNewName === source.name) {
+                    return onClose();
+                }
+
+                if (existingSources.some(s => s.id !== source.id && s.name.toLowerCase() === sanitizedNewName.toLowerCase())) {
+                    return setError('A source with this name already exists.');
+                }
+
+                setIsLoading(true);
+                try {
+                    await onRenameSource(source.id, sanitizedNewName);
+                    onClose();
+                } catch (err) {
+                    console.error("Error renaming source:", err);
+                    setError('Failed to rename source: Check console for details.');
+                } finally {
+                    setIsLoading(false);
+                }
+            };
+
+            return (
+                <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+                    <div className="bg-white p-6 rounded-xl shadow-2xl w-full max-w-sm animate-fade-in">
+                        <h3 className="text-xl font-bold text-gray-800 mb-4 flex justify-between items-center">
+                            Rename Data Source
+                            <button onClick={onClose} className="text-gray-400 hover:text-gray-800"><X size={20} /></button>
+                        </h3>
+                        
+                        <form onSubmit={handleSubmit} className="space-y-4">
+                            <div>
+                                <label className="block text-sm font-medium text-gray-700">Current Name:</label>
+                                <p className="font-bold text-lg mb-2">{source.name}</p>
+
+                                <label className="block text-sm font-medium text-gray-700">New Source Name</label>
+                                <input type="text" value={newName} onChange={e => setNewName(e.target.value)} 
+                                    className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 p-2 border" 
+                                    disabled={isLoading}
+                                />
+                            </div>
+                            {error && <p className="text-red-500 text-sm font-semibold">{error}</p>}
+
+                            <button type="submit" 
+                                className={`w-full py-2 rounded-md transition flex items-center justify-center ${isLoading ? 'bg-gray-400 text-gray-600 cursor-not-allowed' : 'bg-blue-600 text-white hover:bg-blue-700'}`}
+                                disabled={isLoading}
+                            >
+                                {isLoading ? 'Renaming...' : 'Save New Name'}
+                            </button>
+                        </form>
+                    </div>
+                </div>
+            );
+        };
+
+
+        // --- AUTH COMPONENTS ---
+        const RegisterScreen = ({ onRegister, onSwitchToLogin, setUsers }) => {
+            const [name, setName] = useState('');
+            const [username, setUsername] = useState('');
+            const [password, setPassword] = useState('');
+            const [error, setError] = useState('');
+            // NOTE: Mock user logic removed for Firebase environment
+
+            const handleRegister = (e) => {
+                e.preventDefault();
+                alert("User registration is disabled. Authentication is handled by the Canvas environment token or Firebase console user creation.");
+            };
+
+            return (
+                <div className="w-full space-y-4">
+                    <h1 className="text-xl font-bold text-center text-blue-900">Create Account</h1>
+                    <p className="text-xs text-center text-red-500">Registration is managed externally. Please sign in or ask the admin for access.</p>
+                    <form onSubmit={handleRegister} className="space-y-4">
+                        <div>
+                            <label className="block text-sm font-medium text-gray-700">Full Name</label>
+                            <input type="text" value={name} onChange={e=>setName(e.target.value)} 
+                                className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 p-2 border" disabled={true} />
+                        </div>
+                        <div>
+                            <label className="block text-sm font-medium text-gray-700">Username (Unique)</label>
+                            <input type="text" value={username} onChange={e=>setUsername(e.target.value)} 
+                                className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 p-2 border" disabled={true} />
+                        </div>
+                        <div>
+                            <label className="block text-sm font-medium text-gray-700">Password</label>
+                            <input type="password" value={password} onChange={e=>setPassword(e.target.value)} 
+                                className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 p-2 border" disabled={true} />
+                        </div>
+                        {error && <p className="text-red-500 text-sm">{error}</p>}
+                        <button type="submit" className="w-full bg-gray-600 text-white py-2 rounded-md cursor-not-allowed" disabled={true}>
+                            Register (Disabled)
+                        </button>
+                    </form>
+                    <button onClick={onSwitchToLogin} className="w-full text-blue-600 text-sm hover:underline">
+                        Return to Sign In
+                    </button>
+                </div>
+            );
+        };
+
+        const LoginScreen = ({ onLogin, onSwitchToRegister }) => {
+            const [username, setUsername] = useState('');
+            const [password, setPassword] = useState('');
+            const [error, setError] = useState('');
+            
+            const handleLogin = (e) => {
+                e.preventDefault();
+                alert("Login is handled automatically using the Canvas environment token.");
+            };
+
+            return (
+                <div className="w-full space-y-4">
+                    <h1 className="text-xl font-bold text-center text-blue-900">Sign In</h1>
+                    <p className="text-xs text-center text-gray-500">Authentication is managed by the deployment environment.</p>
+                    <form onSubmit={handleLogin} className="space-y-4">
+                        <div>
+                            <label className="block text-sm font-medium text-gray-700">Username</label>
+                            <input type="text" value={'*** Managed by Canvas ***'} disabled={true} 
+                                className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 p-2 border bg-gray-100" />
+                        </div>
+                        <div>
+                            <label className="block text-sm font-medium text-gray-700">Password</label>
+                            <input type="password" value={'******************'} disabled={true} 
+                                className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 p-2 border bg-gray-100" />
+                        </div>
+                        {error && <p className="text-red-500 text-sm">{error}</p>}
+                        <button type="submit" className="w-full bg-blue-600 text-white py-2 rounded-md hover:bg-blue-700 transition cursor-not-allowed" disabled={true}>
+                            Sign In (Auto)
+                        </button>
+                    </form>
+                    <button onClick={onSwitchToRegister} className="w-full text-green-600 text-sm hover:underline">
+                        Need access? (Registration Disabled)
+                    </button>
+                </div>
+            );
+        };
+
+        const AuthWrapper = ({ onLogin, setUsers }) => {
+            const [mode, setMode] = useState('login');
+            
+            useEffect(() => {
+                const users = JSON.parse(localStorage.getItem('MOCK_USERS') || '[]');
+                if (users.length === 0) {
+                    setMode('register');
+                }
+            }, []);
+
+            return (
+                <div className="min-h-screen flex items-center justify-center bg-gray-100">
+                    <div className="bg-white p-8 rounded-2xl shadow-xl w-96">
+                        <h2 className="text-2xl font-bold text-center mb-6 text-blue-900">R.E.A.D. - Ranau English Analytics Dashboard</h2>
+                        {mode === 'login' ? (
+                            <LoginScreen 
+                                onLogin={onLogin} 
+                                onSwitchToRegister={() => setMode('register')} 
+                            />
+                        ) : (
+                            <RegisterScreen 
+                                onRegister={onLogin} 
+                                onSwitchToLogin={() => setMode('login')} 
+                                setUsers={setUsers}
+                            />
+                        )}
+                    </div>
+                </div>
+            );
+        };
+
+        const SidebarItem = ({ icon, label, active, onClick }) => (
+            <button onClick={onClick} className={`w-full flex items-center px-3 py-2 rounded-lg transition-all ${active ? 'bg-blue-600 text-white shadow-lg shadow-blue-900/50' : 'text-slate-400 hover:bg-slate-800 hover:text-white'}`}>
+                {icon}
+                <span className="ml-3 text-sm font-medium">{label}</span>
+            </button>
+        );
+
+
+        // --- MAIN APP ---
+        const App = () => {
+            const [isAuthReady, setIsAuthReady] = useState(false);
+            const [user, setUser] = useState(null);
+            const [userRole, setUserRole] = useState(null);
+            
+            // Centralized Firestore Data States
+            const [sources, setSources] = useState([]);
+            const [globalKpiTarget, setGlobalKpiTarget] = useState(4.50);
+            const [masterSwotData, setMasterSwotData] = useState({});
+            const [masterInterventionData, setMasterInterventionData] = useState({});
+            
+            const [activeSourceId, setActiveSourceId] = useState(null);
+            const [activeTab, setActiveTab] = useState('data');
+            const [showAddSourceModal, setShowAddSourceModal] = useState(false);
+            const [sourceToRename, setSourceToRename] = useState(null); 
+
+            // --- 1. FIREBASE AUTHENTICATION & ROLE MANAGEMENT ---
+            
+            // Helper to check and set the admin role based on Firestore
+            const checkAndSetAdminRole = useCallback(async (loggedInUser) => {
+                if (!window.db) return 'viewer';
+                
+                const adminDocRef = window.firebase.doc(window.db, `artifacts/${window.appId}/public/data/admin/admin_user`);
+                
+                try {
+                    const adminDoc = await window.firebase.getDoc(adminDocRef);
+
+                    if (!adminDoc.exists()) {
+                        // Case 1: FIRST LOGGER (Set current user as Admin)
+                        if (!loggedInUser.isAnonymous) {
+                            await window.firebase.setDoc(adminDocRef, { 
+                                uid: loggedInUser.uid, 
+                                set_at: Date.now() 
+                            });
+                            console.log("SUCCESS: First non-anonymous user set as Admin.");
+                            return 'admin';
+                        } else {
+                            // First logger is anonymous, defaults to viewer, no admin set yet
+                            return 'viewer';
+                        }
+                    } else if (adminDoc.data().uid === loggedInUser.uid) {
+                        // Case 2: RECOGNIZED ADMIN
+                        return 'admin';
+                    } else {
+                        // Case 3: REGULAR USER
+                        return 'viewer';
+                    }
+                } catch (error) {
+                    console.error("Error during Admin Check:", error);
+                    return loggedInUser.isAnonymous ? 'viewer' : 'admin'; // Fallback
+                }
+            }, []);
+
+
+            useEffect(() => {
+                if (!window.auth) {
+                    setUserRole('viewer'); 
+                    setIsAuthReady(true);
+                    return;
+                }
+
+                const handleSignIn = async () => {
+                    let signedInUser = null;
+                    
+                    if (window.initialAuthToken) {
+                         try {
+                            const userCred = await window.firebase.signInWithCustomToken(window.auth, window.initialAuthToken);
+                            signedInUser = userCred.user;
+                        } catch (error) {
+                            console.warn("Custom Token sign-in failed. Falling back.", error);
+                        }
+                    }
+                    
+                    if (!signedInUser) {
+                        try {
+                            const userCred = await window.firebase.signInAnonymously(window.auth);
+                            signedInUser = userCred.user;
+                        } catch (error) {
+                            console.error("Anonymous sign-in failed:", error);
+                        }
+                    }
+                    return signedInUser;
+                };
+
+                const unsubscribeAuth = window.firebase.onAuthStateChanged(window.auth, async (fbUser) => {
+                    if (fbUser) {
+                        // Determine the user's role based on the First Logger logic
+                        const assignedRole = await checkAndSetAdminRole(fbUser);
+                        
+                        setUser(fbUser);
+                        setUserRole(assignedRole);
+                        setIsAuthReady(true);
+
+                    } else {
+                        // Attempt to sign in if no user is present
+                        const signedInUser = await handleSignIn();
+                        if (!signedInUser) {
+                            setUserRole('viewer');
+                            setUser(null);
+                            setIsAuthReady(true);
+                        }
+                    }
+                });
+
+                return () => unsubscribeAuth();
+            }, [checkAndSetAdminRole]); 
+
+            // --- 2. FIREBASE DATA LISTENERS (Real-time Sync) ---
+            useEffect(() => {
+                // Wait for the Firebase instances and user object to be ready
+                if (!isAuthReady || !window.db || !user) return;
+
+                // --- 2a. Sources Listener (Public/Global Data) ---
+                const sourcesRef = window.firebase.collection(window.db, `artifacts/${window.appId}/public/data/sources`);
+                const unsubscribeSources = window.firebase.onSnapshot(sourcesRef, (snapshot) => {
+                    const newSources = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+                    
+                    if (newSources.length === 0) {
+                        seedInitialData();
+                        return;
+                    }
+                    
+                    setSources(newSources);
+                    if (!newSources.some(s => s.id === activeSourceId)) {
+                        setActiveSourceId(newSources[0]?.id || null);
+                    }
+                }, (error) => console.error("Firestore Sources Listen Error:", error));
+
+                // --- 2b. Global KPI Listener (Single Document) ---
+                const kpiDocRef = window.firebase.doc(window.db, `artifacts/${window.appId}/public/data/kpi/global_kpi_target`);
+                const unsubscribeKPI = window.firebase.onSnapshot(kpiDocRef, (doc) => {
+                    if (doc.exists()) {
+                        setGlobalKpiTarget(doc.data().target || 4.50);
+                    } else {
+                        window.firebase.setDoc(kpiDocRef, { target: 4.50, updated_at: Date.now() });
+                    }
+                }, (error) => console.error("Firestore KPI Listen Error:", error));
+
+                // --- 2c. User-Specific Data Listener (SWOT/Intervention) ---
+                
+                const userSwotRef = window.firebase.collection(window.db, `artifacts/${window.appId}/users/${user.uid}/swot`);
+                const unsubscribeSwot = window.firebase.onSnapshot(userSwotRef, (snapshot) => {
+                    const data = {};
+                    snapshot.docs.forEach(doc => {
+                        data[doc.id] = doc.data(); // doc.id is the schoolId
+                    });
+                    setMasterSwotData(data);
+                }, (error) => console.error("Firestore SWOT Listen Error:", error));
+
+                const userInterventionRef = window.firebase.collection(window.db, `artifacts/${window.appId}/users/${user.uid}/interventions`);
+                const unsubscribeIntervention = window.firebase.onSnapshot(userInterventionRef, (snapshot) => {
+                    const data = {};
+                    snapshot.docs.forEach(doc => {
+                        data[doc.id] = doc.data(); // doc.id is the schoolId
+                    });
+                    setMasterInterventionData(data);
+                }, (error) => console.error("Firestore Intervention Listen Error:", error));
+                
+                return () => {
+                    unsubscribeSources();
+                    unsubscribeKPI();
+                    unsubscribeSwot();
+                    unsubscribeIntervention();
+                };
+            }, [isAuthReady, user, activeSourceId]); 
+            
+            // --- Seed Initial Data (Runs if Sources collection is empty) ---
+            const seedInitialData = useCallback(async () => {
+                // Only allow seeding if user is admin AND sources are genuinely empty
+                if (!window.db || sources.length > 0 || userRole !== 'admin') return;
+
+                console.log("Seeding initial mock data to Firestore...");
+                const sourcesRef = window.firebase.collection(window.db, `artifacts/${window.appId}/public/data/sources`);
+                const batch = window.firebase.writeBatch(window.db);
+
+                INITIAL_SOURCES.forEach((source) => {
+                    const newDocRef = window.firebase.doc(sourcesRef); 
+                    const sourceToSave = { 
+                        ...source,
+                        id: newDocRef.id, 
+                        status: 'ready',
+                        updatedAt: Date.now()
+                    };
+                    delete sourceToSave.uid; 
+                    batch.set(newDocRef, sourceToSave);
+                });
+
+                try {
+                    await batch.commit();
+                    console.log("Initial mock data seeded.");
+                } catch (error) {
+                    console.error("Error committing batch seed:", error);
+                }
+            }, [sources, userRole]);
+            
+
+            // --- CUD (Create, Update, Delete) Handlers ---
+
+            const handleAddNewSource = async (name, url) => {
+                if (userRole !== 'admin') throw new Error("Permission denied.");
+
+                const newMockData = GENERATE_FROM_CSV_SNIPPETS(); 
+                const newPreviousGP = parseFloat((INITIAL_SOURCES[0].previousGP + (Math.random() * 0.5 - 0.25)).toFixed(2));
+                
+                const sourceData = {
+                    name: name,
+                    previousGP: newPreviousGP,
+                    summary: newMockData.summary,
+                    students: newMockData.students,
+                    status: 'ready',
+                    updatedAt: Date.now()
+                };
+
+                const sourcesRef = window.firebase.collection(window.db, `artifacts/${window.appId}/public/data/sources`);
+                await window.firebase.addDoc(sourcesRef, sourceData);
+            };
+            
+            const handleRenameSource = async (sourceId, newName) => {
+                 if (userRole !== 'admin') throw new Error("Permission denied.");
+
+                 const docRef = window.firebase.doc(window.db, `artifacts/${window.appId}/public/data/sources/${sourceId}`);
+                 await window.firebase.updateDoc(docRef, { name: newName, updatedAt: Date.now() });
+            };
+
+            const handleDeleteSource = async (sourceId) => {
+                 if (userRole !== 'admin') throw new Error("Permission denied.");
+                 
+                 if (sources.length <= 1) {
+                    alert("Cannot delete the last remaining data source.");
+                    return;
+                }
+
+                 if (window.confirm("Are you sure you want to delete this data source? This action cannot be undone.")) {
+                    const docRef = window.firebase.doc(window.db, `artifacts/${window.appId}/public/data/sources/${sourceId}`);
+                    await window.firebase.deleteDoc(docRef);
+                 }
+            };
+            
+            // Handler for SWOT/Intervention updates (User specific)
+            const handleUserDataUpdate = (collectionName) => async (schoolId, newPlan) => {
+                if (!user || userRole === 'viewer') return alert("Access denied. Login/Admin role required for editing.");
+
+                const docRef = window.firebase.doc(window.db, `artifacts/${window.appId}/users/${user.uid}/${collectionName}/${schoolId}`);
+                await window.firebase.setDoc(docRef, newPlan, { merge: true });
+            };
+
+            const handleSwotUpdate = handleUserDataUpdate('swot');
+            const handleInterventionUpdate = handleUserDataUpdate('interventions');
+
+            // --- Admin KPI Update ---
+            const updateGlobalKpiTarget = async (newTarget) => {
+                if (userRole !== 'admin') return alert("Permission denied. Only admins can set global KPI.");
+                const kpiDocRef = window.firebase.doc(window.db, `artifacts/${window.appId}/public/data/kpi/global_kpi_target`);
+                await window.firebase.setDoc(kpiDocRef, { target: parseFloat(newTarget), updatedAt: Date.now() });
+            };
+
+            // Derived State
+            const activeSource = sources.find(s => s.id === activeSourceId) || sources[0] || {name: 'No Data Loaded', summary: [], students: []};
+
+            // --- Render Guards ---
+            if (!isAuthReady) {
+                return (
+                    <div className="min-h-screen flex items-center justify-center bg-gray-100">
+                        <div className="text-center p-8 bg-white rounded-xl shadow-xl">
+                            <svg className="animate-spin h-8 w-8 text-blue-600 mx-auto" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg>
+                            <h2 className="text-xl font-bold mt-4 text-blue-900">Connecting to Firebase...</h2>
+                            <p className="text-sm text-gray-500 mt-2">Loading user session and real-time data streams.</p>
+                        </div>
+                    </div>
+                );
+            }
+            
+            if (!user) {
+                 return (
+                    <div className="min-h-screen flex items-center justify-center bg-gray-100">
+                        <div className="bg-white p-8 rounded-2xl shadow-xl w-96 text-center">
+                            <h2 className="text-2xl font-bold mb-4 text-red-700">Access Denied</h2>
+                            <p className="text-gray-600">Could not establish a valid session. Please ensure your Firebase configuration and security rules permit access.</p>
+                        </div>
+                    </div>
+                 );
+            }
+
+            // Get Current User's Data Slices (Keyed by document ID/SchoolId)
+            const currentUserSwotData = masterSwotData;
+            const currentUserInterventionData = masterInterventionData;
+
+            return (
+                <div className="flex h-screen overflow-hidden bg-gray-50">
+                    {/* SIDEBAR */}
+                    <div className="w-64 bg-slate-900 text-white flex flex-col shadow-2xl z-20">
+                        <div className="p-6 border-b border-slate-700">
+                            <h2 className="text-xl font-bold tracking-tight">R.E.A.D.</h2>
+                            <p className="text-xs text-slate-400 mt-1">Ranau English Analytics Dashboard</p>
+                            <p className="text-xs text-slate-400 mt-2">Logged in as: <span className="text-blue-400 font-semibold">{user.uid.substring(0, 8)}...</span></p>
+                            <Badge color={userRole === 'admin' ? 'bg-red-900 text-red-200 mt-2 block w-fit' : 'bg-green-900 text-green-200 mt-2 block w-fit'}>
+                                {userRole ? userRole.toUpperCase() : 'VIEWER'}
+                            </Badge>
+                        </div>
+
+                        <nav className="flex-1 p-4 space-y-2 overflow-y-auto">
+                           {/* Exam Sources */}
+                            <div className="mb-6">
+                                <h3 className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-2 px-2">Exam Sources</h3>
+                                {sources.map(source => (
+                                    <div key={source.id} 
+                                        className={`group flex items-center justify-between px-3 py-2 rounded-lg transition-colors ${activeSourceId === source.id ? 'bg-blue-600 text-white' : 'hover:bg-slate-800 text-slate-300'}`}
+                                    >
+                                        {/* Source Name */}
+                                        <div className="flex-1 truncate text-sm cursor-pointer" onClick={() => setActiveSourceId(source.id)}>
+                                            {source.name}
+                                        </div>
+                                        
+                                        {/* Admin Actions (Rename & Delete) - Conditional Rendering */}
+                                        {userRole === 'admin' && (
+                                            <div className="flex items-center space-x-1">
+                                                {/* Rename Button */}
+                                                <button 
+                                                    onClick={() => setSourceToRename(source)}
+                                                    className="p-1 rounded-full ml-2 text-slate-400 transition-colors hover:bg-slate-700 hover:text-white"
+                                                    title="Rename Source"
+                                                >
+                                                    <Edit3 size={16} />
+                                                </button>
+                                                
+                                                {/* Delete Button */}
+                                                <button 
+                                                    onClick={() => handleDeleteSource(source.id)}
+                                                    className={`p-1 rounded-full text-red-400 transition-colors ${sources.length <= 1 ? 'opacity-50 cursor-not-allowed' : 'hover:bg-red-900'}`}
+                                                    disabled={sources.length <= 1}
+                                                    title={sources.length <= 1 ? "Cannot delete the last source" : "Delete Source"}
+                                                >
+                                                    <X size={16} />
+                                                </button>
+                                            </div>
+                                        )}
+                                    </div>
+                                ))}
+                                {/* Add New Source Button (Admin Only) */}
+                                {userRole === 'admin' && (
+                                    <button 
+                                        onClick={() => setShowAddSourceModal(true)}
+                                        className="group flex items-center w-full px-3 py-2 rounded-lg cursor-pointer transition-colors text-blue-400 hover:bg-slate-800 hover:text-white border border-dashed border-slate-700 mt-2"
+                                    >
+                                        <PlusCircle size={18} className="mr-3" />
+                                        <span className="text-sm font-medium">Add New Source (Mock CSV)</span>
+                                    </button>
+                                )}
+                            </div>
+
+                            <div>
+                                <h3 className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-2 px-2">Navigation</h3>
+                                <SidebarItem icon={<LayoutDashboard size={18}/>} label="Data Overview" active={activeTab === 'data'} onClick={() => setActiveTab('data')} />
+                                <SidebarItem icon={<BarChart3 size={18}/>} label="Deep Analysis" active={activeTab === 'analysis'} onClick={() => setActiveTab('analysis')} />
+                                <SidebarItem icon={<TrendingUp size={18}/>} label="Comparisons" active={activeTab === 'comparison'} onClick={() => setActiveTab('comparison')} />
+                                <SidebarItem icon={<FileSpreadsheet size={18}/>} label="Wayforward SWOT" active={activeTab === 'swot'} onClick={() => setActiveTab('swot')} />
+                                <SidebarItem icon={<HeartHandshake size={18}/>} label="Intervention" active={activeTab === 'intervention'} onClick={() => setActiveTab('intervention')} />
+                                
+                                {userRole === 'admin' && (
+                                    <SidebarItem icon={<Settings size={18}/>} label="Admin Management" active={activeTab === 'admin'} onClick={() => setActiveTab('admin')} />
+                                )}
+
+                            </div>
+                        </nav>
+
+                        <div className="p-4 border-t border-slate-700">
+                            {/* NOTE: We don't use signOut() as Canvas manages session. We just clear local state. */}
+                            <button onClick={() => {
+                                alert("Session management is handled by the deployment environment. Sign-out capability is for local mock testing only.");
+                            }} className="flex items-center text-slate-400 hover:text-white transition-colors w-full">
+                                <LogOut size={18} className="mr-2" /> Sign Out (Mock)
+                            </button>
+                        </div>
+                    </div>
+
+                    {/* MAIN CONTENT */}
+                    <div className="flex-1 flex flex-col h-full overflow-hidden">
+                        {/* HEADER */}
+                        <header className="bg-white border-b px-8 py-4 flex justify-between items-center shadow-sm z-10">
+                            <div>
+                                <h1 className="text-2xl font-bold text-gray-800">
+                                    {activeTab === 'data' && 'Data Overview'}
+                                    {activeTab === 'analysis' && 'Performance Analysis'}
+                                    {activeTab === 'comparison' && 'Strategic Comparison'}
+                                    {activeTab === 'swot' && 'SWOT & Wayforward'}
+                                    {activeTab === 'intervention' && 'Targeted Intervention'}
+                                    {activeTab === 'admin' && 'Admin Management'}
+                                </h1>
+                                <p className="text-sm text-gray-500">Active Source: <span className="font-semibold text-blue-600">{activeSource.name}</span></p>
+                            </div>
+                        </header>
+
+                        {/* CONTENT AREA */}
+                        <main className="flex-1 overflow-y-auto p-8 hide-scrollbar">
+                            {/* Check if data exists before rendering main tabs */}
+                            {sources.length === 0 ? (
+                                <div className="p-8 text-center bg-yellow-50 border border-yellow-300 rounded-lg">
+                                    <h2 className="text-xl font-bold text-yellow-800">No Data Sources Available</h2>
+                                    <p className="text-yellow-700 mt-2">As an Admin, please use the "Add New Source" button on the left to seed initial data.</p>
+                                </div>
+                            ) : (
+                                <>
+                                    {activeTab === 'data' && <TabData source={activeSource} sources={sources} />}
+                                    {activeTab === 'analysis' && <TabAnalysis sources={sources}/>}
+                                    {activeTab === 'comparison' && <TabComparison sources={sources} />}
+                                    {activeTab === 'swot' && (
+                                        <TabSWOT 
+                                            userData={currentUserSwotData} 
+                                            userId={user.uid}
+                                            onUpdate={handleSwotUpdate}
+                                            globalKpiTarget={globalKpiTarget} 
+                                            sources={sources} 
+                                            canEdit={userRole === 'admin'} 
+                                        />
+                                    )}
+                                    {activeTab === 'intervention' && (
+                                        <TabIntervention
+                                            userData={currentUserInterventionData}
+                                            userId={user.uid}
+                                            onUpdate={handleInterventionUpdate}
+                                            sources={sources}
+                                            activeSource={activeSource}
+                                        />
+                                    )}
+                                    {activeTab === 'admin' && userRole === 'admin' && <TabAdmin swotData={masterSwotData} sources={sources} updateGlobalKpiTarget={updateGlobalKpiTarget} globalKpiTarget={globalKpiTarget} interventionData={masterInterventionData} />}
+                                </>
+                            )}
+                        </main>
+                    </div>
+                    
+                    {/* MODALS */}
+                    {showAddSourceModal && (
+                        <AddSourceModal 
+                            onClose={() => setShowAddSourceModal(false)}
+                            onAddSource={handleAddNewSource}
+                            existingSources={sources}
+                        />
+                    )}
+                    {sourceToRename && (
+                        <RenameSourceModal
+                            source={sourceToRename}
+                            onClose={() => setSourceToRename(null)}
+                            onRenameSource={handleRenameSource}
+                            existingSources={sources}
+                        />
+                    )}
+                </div>
+            );
+        };
+
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        window.addEventListener('load', () => {
+             if (window.firebase) {
+                 root.render(<App />);
+             } else {
+                 console.error("Firebase SDK functions not initialized on window.firebase. Check module script for errors.");
+             }
+        });
+    </script>
+</body>
+</html>
