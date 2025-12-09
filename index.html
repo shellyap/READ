@@ -68,7 +68,7 @@
                 updateDoc: updateDoc,
                 writeBatch: writeBatch,
                 getDocs: getDocs,
-                getDoc: getDoc, // Added for role check
+                getDoc: getDoc, 
             };
 
             // Expose initialization details globally for React component
@@ -721,7 +721,7 @@
 
             // --- 1. FIREBASE AUTHENTICATION & ROLE MANAGEMENT ---
             
-            // Helper to check and set the admin role based on Firestore
+            // Helper to check and set the admin role based on Firestore (First Logger Logic)
             const checkAndSetAdminRole = useCallback(async (loggedInUser) => {
                 if (!window.db) return 'viewer';
                 
@@ -732,27 +732,25 @@
 
                     if (!adminDoc.exists()) {
                         // Case 1: FIRST LOGGER (Set current user as Admin)
-                        if (!loggedInUser.isAnonymous) {
-                            await window.firebase.setDoc(adminDocRef, { 
-                                uid: loggedInUser.uid, 
-                                set_at: Date.now() 
-                            });
-                            console.log("SUCCESS: First non-anonymous user set as Admin.");
-                            return 'admin';
-                        } else {
-                            // First logger is anonymous, defaults to viewer, no admin set yet
-                            return 'viewer';
-                        }
+                        // Allow BOTH non-anonymous (token user) AND anonymous user to be the first admin
+                        await window.firebase.setDoc(adminDocRef, { 
+                            uid: loggedInUser.uid, 
+                            isAnonymous: loggedInUser.isAnonymous,
+                            set_at: Date.now() 
+                        });
+                        console.log(`SUCCESS: First user (UID: ${loggedInUser.uid}) set as Admin.`);
+                        return 'admin';
+                        
                     } else if (adminDoc.data().uid === loggedInUser.uid) {
                         // Case 2: RECOGNIZED ADMIN
                         return 'admin';
                     } else {
-                        // Case 3: REGULAR USER
+                        // Case 3: REGULAR USER/NON-ADMIN
                         return 'viewer';
                     }
                 } catch (error) {
                     console.error("Error during Admin Check:", error);
-                    return loggedInUser.isAnonymous ? 'viewer' : 'admin'; // Fallback
+                    return 'viewer'; // Default to viewer on critical error
                 }
             }, []);
 
