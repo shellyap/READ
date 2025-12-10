@@ -21,7 +21,7 @@
     <!-- Babel -->
     <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
     
-    <!-- SheetJS (XLSX) for Excel Export -->
+    <!-- SheetJS (XLSX) for Excel Export and Parsing -->
     <script src="https://cdn.sheetjs.com/xlsx-latest/package/dist/xlsx.full.min.js"></script>
 
     <!-- Firebase SDK Imports (MUST USE LATEST VERSION FROM CDN) -->
@@ -263,25 +263,7 @@
         
         // --- Firebase Utilities ---
         const getDb = () => window.db;
-        const getAuth = () => window.auth;
-        const getAppId = () => window.appId;
         
-        const getGlobalDataRef = (collectionName) => {
-            const db = getDb();
-            const appId = getAppId();
-            return window.firebase.collection(db, `artifacts/${appId}/public/data/${collectionName}`);
-        };
-
-        const getUserDataRef = (collectionName, userId) => {
-            const db = getDb();
-            const appId = getAppId();
-            if (!userId) {
-                console.error("Cannot get user data ref: userId is missing.");
-                return null;
-            }
-            return window.firebase.collection(db, `artifacts/${appId}/users/${userId}/${collectionName}`);
-        };
-
         const calculateWeightedGP = (rows) => {
             const totalCandidates = rows.reduce((acc, row) => acc + row.totalCandidates, 0);
             
@@ -306,7 +288,7 @@
         };
 
 
-        // --- CORE UI COMPONENTS (Moved to top level) ---
+        // --- CORE UI COMPONENTS ---
 
         const Badge = ({ children, color }) => (
             <span className={`px-2 py-1 rounded text-xs font-semibold ${color}`}>
@@ -410,7 +392,6 @@
                                 className="flex-1 w-full bg-white/80 border-gray-300 rounded-md p-2 text-sm focus:ring-blue-500 focus:border-blue-500 resize-none"
                                 rows="2"
                                 value={item.text}
-                                placeholder={`Enter intervention...`}
                                 onChange={(e) => onUpdate(category, item.id, e.target.value)}
                                 onBlur={(e) => {
                                     if (e.target.value.trim() === "") {
@@ -438,17 +419,141 @@
             </div>
         );
         
+        // --- DATA PROCESSING HELPERS (SheetJS Integration) ---
+        const processFileToData = (file) => {
+            return new Promise((resolve, reject) => {
+                const reader = new FileReader();
+                reader.onload = (e) => {
+                    try {
+                        const data = e.target.result;
+                        // XLSX is globally available via CDN import
+                        const workbook = XLSX.read(data, { type: 'binary' });
+                        const sheetName = workbook.SheetNames[0];
+                        const worksheet = workbook.Sheets[sheetName];
+                        
+                        // Convert sheet to JSON array
+                        let rawJson = XLSX.utils.sheet_to_json(worksheet, { header: 1 });
+                        
+                        // Assuming header is row 1 (index 0) and data starts at row 2 (index 1)
+                        if (rawJson.length < 2) return reject(new Error("File is empty or has no data rows."));
+
+                        const headers = rawJson[0];
+                        const dataRows = rawJson.slice(1);
+
+                        // Expected columns (case insensitive, approximate matching)
+                        const nameKey = headers.find(h => /name|nama|student/i.test(h)) || 'Student Name';
+                        const markKey = headers.find(h => /mark|score|skor/i.test(h)) || 'Mark';
+                        const gradeKey = headers.find(h => /grade|gred|gp/i.test(h)) || 'Grade';
+                        const classKey = headers.find(h => /class|kelas/i.test(h)) || 'Class';
+                        const schoolKey = headers.find(h => /school|sekolah|seko/i.test(h)) || 'School';
+                        
+                        if (!nameKey || !markKey || !gradeKey) {
+                             return reject(new Error("Missing required headers: Name, Mark/Score, and Grade/Gred are required."));
+                        }
+
+                        // --- 1. Process Students and Aggregate Summary ---
+                        const processedStudents = [];
+                        const grouped = {};
+                        let studentIdCounter = 1;
+
+                        dataRows.forEach(row => {
+                            const student = {};
+                            headers.forEach((header, index) => {
+                                // Simple header mapping (uses original header name)
+                                student[header.trim()] = row[index];
+                            });
+
+                            const sName = student[nameKey] || 'UNKNOWN STUDENT';
+                            const sSchool = student[schoolKey] || 'UNKNOWN SCHOOL';
+                            const sClass = student[classKey] || 'UNKNOWN CLASS';
+                            const sGrade = (student[gradeKey] || 'G').toString().toUpperCase().trim();
+                            const sMark = parseInt(student[markKey]) || 0;
+
+                            if (!sName || !sSchool) return; // Skip invalid rows
+
+                            const studentEntry = {
+                                id: studentIdCounter++,
+                                name: sName,
+                                school: sSchool,
+                                className: sClass,
+                                grade: sGrade,
+                                mark: sMark
+                            };
+                            processedStudents.push(studentEntry);
+
+                            // Aggregation for summary
+                            const key = `${sSchool}|${sClass}`;
+                            if(!grouped[key]) {
+                                grouped[key] = {
+                                    schoolId: sSchool.substring(0, 7).toUpperCase(), // Mock ID from school name start
+                                    schoolName: sSchool,
+                                    className: sClass,
+                                    totalCandidates: 0,
+                                    grades: grades.reduce((acc, g) => ({ ...acc, [g]: 0 }), {})
+                                };
+                            }
+                            grouped[key].totalCandidates++;
+                            if(grouped[key].grades[sGrade] !== undefined) {
+                                grouped[key].grades[sGrade]++;
+                            }
+                        });
+
+                        // --- 2. Calculate GP for Summary ---
+                        const summary = [];
+                        Object.values(grouped).forEach(g => {
+                            let sum = 0;
+                            let count = 0;
+                            Object.entries(g.grades).forEach(([grd, qty]) => {
+                                sum += (qty * (POINTS[grd] || 9));
+                                if(grd !== 'TH') count += qty;
+                            });
+                            g.gp = count === 0 ? 9.00 : parseFloat((sum/count).toFixed(2));
+                            summary.push(g);
+                        });
+
+
+                        resolve({ summary, students: processedStudents });
+
+                    } catch (error) {
+                        reject(new Error("Failed to read or parse file: " + error.message));
+                    }
+                };
+
+                reader.onerror = (error) => {
+                    reject(new Error("Error reading file: " + error.target.error));
+                };
+
+                // Read file as binary string (required by SheetJS)
+                reader.readAsBinaryString(file);
+            });
+        };
+
+
+        // --- AddSourceModal (Updated to use File Upload) ---
         const AddSourceModal = ({ onClose, onAddSource, existingSources }) => {
             const [name, setName] = useState('');
-            const [url, setUrl] = useState('');
+            const [file, setFile] = useState(null);
             const [isLoading, setIsLoading] = useState(false);
             const [error, setError] = useState('');
+
+            const handleFileChange = (e) => {
+                const selectedFile = e.target.files[0];
+                if (selectedFile) {
+                     setFile(selectedFile);
+                     // Auto-populate name from file name
+                     const baseName = selectedFile.name.replace(/\.(csv|xlsx|xls)$/i, '');
+                     setName(baseName);
+                     setError('');
+                } else {
+                     setFile(null);
+                }
+            };
 
             const handleSubmit = async (e) => {
                 e.preventDefault();
                 setError('');
-                if (!name.trim() || !url.trim()) {
-                    return setError('Source Name and URL are required.');
+                if (!name.trim() || !file) {
+                    return setError('Source Name and a File are required.');
                 }
                 if (existingSources.some(s => s.name.toLowerCase() === name.trim().toLowerCase())) {
                     return setError('Source name already exists.');
@@ -456,11 +561,15 @@
 
                 setIsLoading(true);
                 try {
-                    await onAddSource(name.trim(), url.trim());
+                    // 1. Process the local file to get structured data
+                    const parsedData = await processFileToData(file);
+
+                    // 2. Commit the real data to Firebase
+                    await onAddSource(name.trim(), parsedData);
                     onClose();
                 } catch (err) {
-                    console.error("Error adding source:", err);
-                    setError('Failed to add source: Check console for details.');
+                    console.error("Error during data processing or Firebase commit:", err);
+                    setError('Error: ' + err.message);
                 } finally {
                     setIsLoading(false);
                 }
@@ -470,42 +579,46 @@
                 <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
                     <div className="bg-white p-6 rounded-xl shadow-2xl w-full max-w-md animate-fade-in">
                         <h3 className="text-xl font-bold text-gray-800 mb-4 flex justify-between items-center">
-                            Add New Data Source
+                            Add New Data Source (CSV/Excel Upload)
                             <button onClick={onClose} className="text-gray-400 hover:text-gray-800"><X size={20} /></button>
                         </h3>
                         <p className="text-sm text-gray-600 mb-4">
-                            Enter the name for the new exam/data source and the CSV/Google Sheet link. 
+                           Upload your student data file (.csv or .xlsx) to initialize a new exam source. Data processing is handled locally using SheetJS.
                         </p>
                         
                         <form onSubmit={handleSubmit} className="space-y-4">
                             <div>
-                                <label className="block text-sm font-medium text-gray-700">Source Name (e.g., PPSA T1 2026)</label>
+                                <label className="block text-sm font-medium text-gray-700 mb-1">Select File (.csv, .xlsx)</label>
+                                <input 
+                                    type="file" 
+                                    accept=".csv, .xlsx, .xls"
+                                    onChange={handleFileChange}
+                                    className="block w-full text-sm text-gray-500 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-blue-50 file:text-blue-700 hover:file:bg-blue-100" 
+                                    disabled={isLoading}
+                                />
+                                {file && <p className="text-xs text-green-600 mt-1">Ready to process: {file.name}</p>}
+                            </div>
+                             <div>
+                                <label className="block text-sm font-medium text-gray-700">Source Name</label>
                                 <input type="text" value={name} onChange={e => setName(e.target.value)} 
                                     className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 p-2 border" 
+                                    placeholder="e.g., PPSA T1 2026"
                                     disabled={isLoading}
                                 />
                             </div>
-                            <div>
-                                <label className="block text-sm font-medium text-gray-700">Google Sheet CSV Export Link</label>
-                                <input type="url" value={url} onChange={e => setUrl(e.target.value)} 
-                                    className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 p-2 border" 
-                                    placeholder="e.g., docs.google.com/spreadsheets/d/..."
-                                    disabled={isLoading}
-                                />
-                                 <p className="text-xs text-red-500 mt-1">Note: Data processing is **mocked** (uses internal mock data generator), but the input fields are functional.</p>
-                            </div>
+
                             {error && <p className="text-red-500 text-sm font-semibold">{error}</p>}
 
                             <button type="submit" 
-                                className={`w-full py-2 rounded-md transition flex items-center justify-center ${isLoading ? 'bg-gray-400 text-gray-600 cursor-not-allowed' : 'bg-blue-600 text-white hover:bg-blue-700'}`}
-                                disabled={isLoading}
+                                className={`w-full py-2 rounded-md transition flex items-center justify-center ${isLoading || !file ? 'bg-gray-400 text-gray-600 cursor-not-allowed' : 'bg-blue-600 text-white hover:bg-blue-700'}`}
+                                disabled={isLoading || !file}
                             >
                                 {isLoading ? (
                                     <>
                                         <svg className="animate-spin -ml-1 mr-3 h-5 w-5 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg>
-                                        Loading Data...
+                                        Processing & Uploading Data...
                                     </>
-                                ) : 'Add Source'}
+                                ) : 'Upload & Add Source'}
                             </button>
                         </form>
                     </div>
@@ -702,6 +815,1411 @@
         );
 
 
+        // --- TAB COMPONENTS ---
+
+        const GroupCard = ({ title, subtitle, count, total, color }) => (
+            <div className={`p-4 rounded-xl border ${color}`}>
+                <h4 className="font-bold text-lg">{title}</h4>
+                <span className="text-xs opacity-75 block mb-2">{subtitle}</span>
+                <div className="flex justify-between items-end">
+                    <span className="text-3xl font-bold">{count}</span>
+                    <span className="text-lg font-semibold opacity-75">{total ? ((count/total)*100).toFixed(1) : 0}%</span>
+                </div>
+            </div>
+        );
+
+        const TabData = ({ source, sources }) => {
+            const [selectedSchool, setSelectedSchool] = useState('ALL');
+            const defaultCompareId = sources.length > 1 ? sources.find(s => s.id !== source.id).id : 'NONE';
+            const [compareSourceId, setCompareSourceId] = useState(defaultCompareId);
+
+            const compareSource = sources.find(s => s.id === parseInt(compareSourceId)) || null;
+
+            const stats = useMemo(() => {
+                let filtered = source.summary;
+                if (selectedSchool !== 'ALL') {
+                    filtered = filtered.filter(row => row.schoolId === selectedSchool);
+                }
+
+                let totalCandidates = 0;
+                let passed = 0;
+                let sumGP = 0;
+                let gradesCount = grades.reduce((acc, g) => ({ ...acc, [g]: 0 }), {});
+
+                filtered.forEach(row => {
+                    totalCandidates += row.totalCandidates;
+                    sumGP += (row.gp * row.totalCandidates);
+                    
+                    Object.keys(gradesCount).forEach(g => {
+                        gradesCount[g] += (row.grades[g] || 0);
+                    });
+                });
+                
+                let countGP = totalCandidates - gradesCount['TH']; 
+
+                passed = totalCandidates - (gradesCount['G'] + gradesCount['TH']);
+
+                const cemerlang = gradesCount['A+'] + gradesCount['A'] + gradesCount['A-'];
+                const kepujian = gradesCount['B+'] + gradesCount['B'] + gradesCount['C+'] + gradesCount['C'];
+                const lulus = gradesCount['D'] + gradesCount['E'];
+                const gagal = gradesCount['G'];
+
+                return {
+                    totalCandidates,
+                    passed,
+                    passRate: totalCandidates ? ((passed/totalCandidates)*100).toFixed(1) : 0,
+                    gp: countGP ? (sumGP / countGP).toFixed(2) : 9.00,
+                    grades: gradesCount,
+                    groups: { cemerlang, kepujian, lulus, gagal, th: gradesCount['TH'] }
+                };
+            }, [source, selectedSchool]);
+
+            const uniqueSchools = useMemo(() => {
+                return [...new Set(source.summary.map(s => JSON.stringify({id: s.schoolId, name: s.schoolName})))].map(JSON.parse);
+            }, [source]);
+
+            const pieData = [
+                { name: 'Cemerlang', value: stats.groups.cemerlang, fill: COLORS.cemerlang },
+                { name: 'Kepujian', value: stats.groups.kepujian, fill: COLORS.kepujian },
+                { name: 'Lulus', value: stats.groups.lulus, fill: COLORS.lulus },
+                { name: 'Gagal', value: stats.groups.gagal, fill: COLORS.gagal },
+            ].filter(d => d.value > 0);
+
+            const barData = Object.entries(stats.grades)
+                .map(([name, count]) => ({
+                    name,
+                    Count: count
+                }));
+
+            const comparativeTableData = useMemo(() => {
+                const schoolData = uniqueSchools.map(s => {
+                    const currentRows = source.summary.filter(r => r.schoolId === s.id);
+                    const currentGP = calculateWeightedGP(currentRows);
+                    
+                    let compareGP = null;
+                    if (compareSource) {
+                        const compareRows = compareSource.summary.filter(r => r.schoolId === s.id);
+                        compareGP = calculateWeightedGP(compareRows);
+                    }
+                    
+                    const trend = compareGP !== null ? currentGP - compareGP : null; 
+
+                    return {
+                        name: s.name,
+                        currentGP: parseFloat(currentGP),
+                        compareGP: compareGP !== null ? parseFloat(compareGP) : null,
+                        trend: trend !== null ? parseFloat(trend.toFixed(2)) : null
+                    };
+                }).sort((a, b) => a.currentGP - b.currentGP);
+
+                return schoolData;
+            }, [source, uniqueSchools, compareSource]);
+            
+            return (
+                <div className="space-y-8 animate-fade-in">
+                    {/* SECTION 1: SLICERS & CARDS */}
+                    <div className="flex flex-col md:flex-row gap-6">
+                        <div className="w-full md:w-1/3 bg-white p-4 rounded-xl shadow-sm border h-fit space-y-3">
+                            <div>
+                                <label className="block text-sm font-medium text-gray-700 mb-1">Filter School</label>
+                                <select 
+                                    className="w-full border-gray-300 rounded-md shadow-sm focus:border-blue-500 focus:ring-blue-500 p-2 border"
+                                    value={selectedSchool}
+                                    onChange={(e) => setSelectedSchool(e.target.value)}
+                                >
+                                    <option value="ALL">All Schools</option>
+                                    {uniqueSchools.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
+                                </select>
+                            </div>
+                            <div>
+                                <label className="block text-sm font-medium text-gray-700 mb-1">Compare Against Source</label>
+                                <select 
+                                    className="w-full border-gray-300 rounded-md shadow-sm focus:border-blue-500 focus:ring-blue-500 p-2 border"
+                                    value={compareSourceId}
+                                    onChange={(e) => setCompareSourceId(e.target.value)}
+                                >
+                                    <option value="NONE" key="compare-none">None</option>
+                                    {sources.filter(s => s.id !== source.id).map(s => <option key={`compare-${s.id}`} value={s.id}>{s.name}</option>)}
+                                </select>
+                            </div>
+                        </div>
+
+                        <div className="flex-1 grid grid-cols-1 md:grid-cols-3 gap-4">
+                            <KpiCard title="Grade Purata (GP)" value={stats.gp} icon={<Zap size={20} className="text-blue-500"/>} />
+                            <KpiCard title="Jumlah Calon" value={stats.totalCandidates} icon={<Users size={20} className="text-purple-500"/>} />
+                            <KpiCard title="Lulus (Pass)" value={`${stats.passed} (${stats.passRate}%)`} color="bg-green-50 border-green-200" icon={<BadgeCheck size={20} className="text-green-600"/>} />
+                        </div>
+                    </div>
+
+                    {/* SECTION 2: PERFORMANCE GROUPS */}
+                    <div>
+                        <h3 className="text-lg font-bold text-gray-800 mb-4">Performance Breakdown</h3>
+                        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+                            <GroupCard title="Cemerlang" subtitle="(A+, A, A-)" count={stats.groups.cemerlang} total={stats.totalCandidates} color="bg-emerald-50 text-emerald-700 border-emerald-200" />
+                            <GroupCard title="Kepujian" subtitle="(B+, B, C+, C)" count={stats.groups.kepujian} total={stats.totalCandidates} color="bg-blue-50 text-blue-700 border-blue-200" />
+                            <GroupCard title="Lulus" subtitle="(D, E)" count={stats.groups.lulus} total={stats.totalCandidates} color="bg-yellow-50 text-yellow-700 border-yellow-200" />
+                            <GroupCard title="Gagal" subtitle="(G)" count={stats.groups.gagal} total={stats.totalCandidates} color="bg-red-50 border-red-200 text-red-700" />
+                        </div>
+                        {stats.groups.th > 0 && (
+                            <div className="mt-4">
+                                <GroupCard title="Tidak Hadir" subtitle="(TH)" count={stats.groups.th} total={stats.totalCandidates} color="bg-gray-100 text-gray-700 border-gray-300" />
+                            </div>
+                        )}
+                    </div>
+
+                    {/* SECTION 3: VISUALIZATIONS (Pie Chart & Bar Chart) */}
+                    <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                        <div className="bg-white p-6 rounded-xl shadow-sm border">
+                            <h4 className="font-bold text-gray-700 mb-4">Grade Group Distribution (Excluding TH)</h4>
+                            <div className="h-64 flex justify-center">
+                                <ResponsiveContainer width="100%" height="100%">
+                                    <PieChart>
+                                        <Pie 
+                                            data={pieData} 
+                                            cx="50%" 
+                                            cy="50%" 
+                                            outerRadius={80} 
+                                            fill="#8884d8" 
+                                            dataKey="value" 
+                                            labelLine={false} 
+                                            label={({ name, percent, cx, cy, midAngle, innerRadius, outerRadius, index }) => {
+                                                const RADIAN = Math.PI / 180;
+                                                const radius = innerRadius + (outerRadius - innerRadius) * 0.5;
+                                                const x = cx + radius * Math.cos(-midAngle * RADIAN);
+                                                const y = cy + radius * Math.sin(-midAngle * RADIAN);
+
+                                                if ((percent * 100) < 5) return null;
+
+                                                return (
+                                                    <text x={x} y={y} fill="white" textAnchor={x > cx ? 'start' : 'end'} dominantBaseline="central" className="text-xs font-semibold">
+                                                        {`${name} ${(percent * 100).toFixed(0)}%`}
+                                                    </text>
+                                                );
+                                            }}
+                                        >
+                                            {pieData.map((entry, index) => (
+                                                <Cell key={`cell-${index}`} fill={entry.fill} />
+                                            ))}
+                                        </Pie>
+                                        <Tooltip formatter={(value) => `${value} Candidates`} />
+                                        <Legend />
+                                    </PieChart>
+                                </ResponsiveContainer>
+                            </div>
+                        </div>
+
+                        <div className="bg-white p-6 rounded-xl shadow-sm border">
+                            <h4 className="font-bold text-gray-700 mb-4">Grade Count Breakdown (A+ to TH)</h4>
+                            <div className="h-64">
+                                <ResponsiveContainer width="100%" height="100%">
+                                    <BarChart data={barData} margin={{ top: 20, right: 30, left: 20, bottom: 5 }}>
+                                        <CartesianGrid strokeDasharray="3 3" />
+                                        <XAxis dataKey="name" />
+                                        <YAxis label={{ value: 'Count', angle: -90, position: 'insideLeft' }} />
+                                        <Tooltip formatter={(value) => `${value} Candidates`} />
+                                        <Legend />
+                                        <Bar dataKey="Count" fill="#3B82F6">
+                                            <LabelList dataKey="Count" position="top" fill="#3B82F6" />
+                                        </Bar>
+                                    </BarChart>
+                                </ResponsiveContainer>
+                            </div>
+                        </div>
+                    </div>
+
+                    /* SECTION 4: COMPARATIVE TABLE */
+                    <div className="bg-white p-6 rounded-xl shadow-sm border overflow-hidden">
+                        <h4 className="font-bold text-gray-700 mb-4">School GP Trend Comparison ({source.name} vs {compareSource ? compareSource.name : 'N/A'})</h4>
+                        <div className="overflow-x-auto">
+                            <table className="min-w-full divide-y divide-gray-200">
+                                <thead className="bg-gray-50">
+                                    <tr>
+                                        <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">School</th>
+                                        <th className="px-4 py-2 text-right text-xs font-medium text-gray-500 uppercase">Current GP ({source.name})</th>
+                                        <th className="px-4 py-2 text-right text-xs font-medium text-gray-500 uppercase">Comparison GP ({compareSource ? compareSource.name : 'N/A'})</th>
+                                        <th className="px-4 py-2 text-center text-xs font-medium text-gray-500 uppercase">GP Trend</th>
+                                    </tr>
+                                </thead>
+                                <tbody className="bg-white divide-y divide-gray-200">
+                                    {comparativeTableData.map(s => {
+                                        const isBetter = s.trend !== null && s.trend < 0;
+                                        const trendIcon = s.trend === null ? '' : 
+                                            isBetter ? <TrendingDown size={16} className="text-green-600" /> : 
+                                            <TrendingUp size={16} className="text-red-600" />;
+                                        
+                                        const trendColor = s.trend === null ? 'text-gray-500' : isBetter ? 'text-green-600 font-semibold' : 'text-red-600 font-semibold';
+                                        
+                                        return (
+                                            <tr key={s.name}>
+                                                <td className="px-4 py-2 text-sm text-gray-900">{s.name}</td>
+                                                <td className="px-4 py-2 text-sm text-gray-900 text-right font-bold">{s.currentGP.toFixed(2)}</td>
+                                                <td className="px-4 py-2 text-sm text-gray-500 text-right">{s.compareGP === null ? 'N/A' : s.compareGP.toFixed(2)}</td>
+                                                <td className={`px-4 py-2 text-sm text-center ${trendColor}`}>
+                                                    <div className="flex items-center justify-center gap-1">
+                                                        {s.trend !== null && trendIcon}
+                                                        <span>{s.trend === null ? 'N/A' : Math.abs(s.trend).toFixed(2)}</span>
+                                                    </div>
+                                                </td>
+                                            </tr>
+                                        );
+                                    })}
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+            );
+        };
+        
+        const TabAnalysis = ({ sources }) => {
+            const latestSource = useMemo(() => sources.reduce((latest, s) => (s.id > latest.id ? s : latest), sources[0]), [sources]);
+            const [activeSourceId, setActiveSourceId] = useState(latestSource.id);
+
+            const activeSource = sources.find(s => s.id === activeSourceId) || latestSource;
+
+            const [selectedSchool, setSelectedSchool] = useState('');
+            const [selectedClass, setSelectedClass] = useState('ALL'); 
+
+            const uniqueSchools = useMemo(() => {
+                return [...new Set(activeSource.summary.map(s => JSON.stringify({id: s.schoolId, name: s.schoolName})))].map(JSON.parse);
+            }, [activeSource]);
+            
+            useEffect(() => {
+                if(uniqueSchools.length > 0) {
+                    const currentSchoolExists = uniqueSchools.some(s => s.id === selectedSchool);
+                    if (!currentSchoolExists) {
+                        setSelectedSchool(uniqueSchools[0].id);
+                    }
+                }
+            }, [activeSource, uniqueSchools]);
+
+            const allSchoolClasses = activeSource.summary.filter(r => r.schoolId === selectedSchool);
+            const uniqueClasses = [...new Set(allSchoolClasses.map(r => r.className))];
+
+            const aggregatedData = useMemo(() => {
+                const schoolName = uniqueSchools.find(us => us.id === selectedSchool)?.name || 'N/A';
+                
+                let classTableData = []; 
+                let totalSchoolCandidates = 0;
+
+                allSchoolClasses.forEach(classSummary => {
+                    const classGrades = classSummary.grades;
+                    let classTotal = classSummary.totalCandidates;
+
+                    totalSchoolCandidates += classTotal;
+
+                    const tableRow = {
+                        className: classSummary.className,
+                        total: classTotal,
+                        gp: classSummary.gp,
+                        A_plus: classGrades['A+'] || 0,
+                        A: classGrades['A'] || 0,
+                        A_minus: classGrades['A-'] || 0,
+                        B_plus: classGrades['B+'] || 0,
+                        B: classGrades['B'] || 0,
+                        C_plus: classGrades['C+'] || 0,
+                        C: classGrades['C'] || 0,
+                        D: classGrades['D'] || 0,
+                        E: classGrades['E'] || 0,
+                        G: classGrades['G'] || 0,
+                        TH: classGrades['TH'] || 0,
+                    };
+                    classTableData.push(tableRow);
+                });
+
+                let dataToFilter = allSchoolClasses;
+                let filterLabel = "All Classes";
+                
+                if (selectedClass !== 'ALL') {
+                    dataToFilter = allSchoolClasses.filter(c => c.className === selectedClass);
+                    filterLabel = selectedClass;
+                }
+
+                let filteredGradeDistribution = grades.reduce((acc, g) => ({ ...acc, [g]: 0 }), {}); 
+                let filteredTotalCandidates = 0;
+
+                dataToFilter.forEach(c => {
+                    grades.forEach(g => { filteredGradeDistribution[g] += (c.grades[g] || 0); });
+                    filteredTotalCandidates += c.totalCandidates;
+                });
+                
+                const groupStats = {};
+                let groupChartData = [];
+                let groupIndex = 0;
+                
+                Object.entries(GRADE_CATEGORIES).forEach(([groupName, gradeKeys]) => {
+                    const count = gradeKeys.reduce((sum, key) => sum + (filteredGradeDistribution[key] || 0), 0);
+                    const percentage = filteredTotalCandidates > 0 ? parseFloat(((count / filteredTotalCandidates) * 100).toFixed(1)) : 0;
+                    groupStats[groupName] = { count, percentage };
+                    
+                    groupChartData.push({
+                        name: groupName,
+                        Percentage: percentage,
+                        color: (groupName === 'Cemerlang' ? COLORS.cemerlang : groupName === 'Kepujian' ? COLORS.kepujian : groupName === 'Lulus' ? COLORS.lulus : groupName === 'Gagal' ? COLORS.gagal : COLORS.th)
+                    });
+                    groupIndex++;
+                });
+
+                const filteredOverallDistribution = Object.entries(filteredGradeDistribution).map(([name, Count]) => ({ name, Count }));
+                const filteredGroupChartData = groupChartData.filter(d => d.Percentage > 0 || d.name === 'Tidak Hadir');
+
+
+                return {
+                    schoolName,
+                    filterLabel,
+                    classTableData, 
+                    totalSchoolCandidates,
+
+                    overallGradeDistribution: filteredOverallDistribution, 
+                    groupStats,                                            
+                    groupChartData: filteredGroupChartData,                
+                    filteredTotalCandidates,                              
+                };
+            }, [activeSource, selectedSchool, selectedClass, allSchoolClasses, uniqueSchools]);
+
+            const filteredStudents = useMemo(() => {
+                const schoolName = uniqueSchools.find(us => us.id === selectedSchool)?.name;
+                let list = activeSource.students.filter(s => s.school === schoolName);
+                
+                if (selectedClass !== 'ALL') {
+                    list = list.filter(s => s.className === selectedClass);
+                }
+                
+                return list.sort((a,b) => {
+                    if (a.grade === 'TH' && b.grade !== 'TH') return 1;
+                    if (a.grade !== 'TH' && b.grade === 'TH') return -1;
+                    return (b.mark || 0) - (a.mark || 0);
+                });
+            }, [activeSource, selectedSchool, selectedClass, uniqueSchools]);
+            
+            const getCategory = (grade) => {
+                for (const [category, grades] of Object.entries(GRADE_CATEGORIES)) {
+                    if (grades.includes(grade)) return category;
+                }
+                return 'Other';
+            };
+
+            const studentCategories = useMemo(() => {
+                const categories = {};
+                Object.keys(GRADE_CATEGORIES).forEach(key => categories[key] = []);
+
+                filteredStudents.forEach(s => {
+                    const category = getCategory(s.grade);
+                    if (categories[category]) {
+                        categories[category].push(s);
+                    }
+                });
+                return categories;
+            }, [filteredStudents]);
+
+            const exportExcel = () => {
+                if (!window.XLSX) return alert("SheetJS not loaded");
+                
+                const wb = XLSX.utils.book_new();
+                const studentDataSheet = [];
+
+                Object.entries(studentCategories).forEach(([catName, students]) => {
+                    students.forEach(s => {
+                         studentDataSheet.push({
+                            "Category": catName,
+                            "School": s.school,
+                            "Class": s.className,
+                            "Student Name": s.name,
+                            "Grade": s.grade,
+                            "Mark": s.mark === null ? 'N/A' : s.mark
+                        });
+                    });
+                });
+                
+                if(studentDataSheet.length > 0) {
+                    const ws = XLSX.utils.json_to_sheet(studentDataSheet);
+                    XLSX.utils.book_append_sheet(wb, ws, "Students_List");
+                }
+
+                const classNamePart = aggregatedData.filterLabel === 'All Classes' ? 'AllClasses' : aggregatedData.filterLabel;
+                XLSX.writeFile(wb, `${aggregatedData.schoolName}_${classNamePart}_Student_Analysis.xlsx`);
+            };
+
+            return (
+                <div className="space-y-8 animate-fade-in">
+
+                    {/* TOP SLICERS (Source, School, and Class) */}
+                    <div className="bg-white p-4 rounded-xl shadow-sm border h-fit space-y-3 md:flex md:space-y-0 gap-4">
+                        <div className="flex-1">
+                            <label className="block text-sm font-medium text-gray-700 mb-1">Select Exam Source</label>
+                            <select 
+                                className="w-full border-gray-300 rounded-md shadow-sm focus:border-blue-500 focus:ring-blue-500 p-2 border"
+                                value={activeSourceId}
+                                onChange={(e) => {
+                                    setActiveSourceId(parseInt(e.target.value));
+                                    setSelectedSchool('');
+                                    setSelectedClass('ALL');
+                                }}
+                            >
+                                {sources.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
+                            </select>
+                        </div>
+                        <div className="flex-1">
+                            <label className="block text-sm font-medium text-gray-700 mb-1">Select School</label>
+                            <select 
+                                className="w-full border-gray-300 rounded-md shadow-sm focus:border-blue-500 focus:ring-blue-500 p-2 border"
+                                value={selectedSchool}
+                                onChange={(e) => {
+                                    setSelectedSchool(e.target.value);
+                                    setSelectedClass('ALL');
+                                }}
+                                disabled={uniqueSchools.length === 0}
+                            >
+                                {uniqueSchools.length === 0 && <option value="">No Schools Available</option>}
+                                {uniqueSchools.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
+                            </select>
+                        </div>
+                        <div className="flex-1">
+                            <label className="block text-sm font-medium text-gray-700 mb-1">Filter by Class</label>
+                            <select className="w-full mt-1 p-2 border rounded-md" value={selectedClass} onChange={e => setSelectedClass(e.target.value)} disabled={!selectedSchool}>
+                                <option value="ALL" key="class-all">All Classes Combined</option>
+                                {uniqueClasses.map(c => <option key={`class-${c}`} value={c}>{c}</option>)}
+                            </select>
+                        </div>
+                    </div>
+
+
+                    {/* SECTION 1: Class Table & Grade Distribution Chart */}
+                    <div className="bg-white p-6 rounded-xl shadow-sm border">
+                        <h3 className="text-lg font-bold text-gray-800 mb-4">Class Performance Breakdown: {aggregatedData.schoolName} ({activeSource.name})</h3>
+                        
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                            <div className="overflow-x-auto">
+                                <h4 className="font-semibold text-gray-700 mb-2">Class GP and Grade Summary (Whole School)</h4>
+                                <div className="max-h-96 overflow-y-auto hide-scrollbar border rounded-lg">
+                                    <table className="min-w-full divide-y divide-gray-200">
+                                        <thead className="bg-gray-50 sticky top-0">
+                                            <tr>
+                                                <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase">Class</th>
+                                                <th className="px-3 py-2 text-right text-xs font-medium text-gray-500 uppercase">Total</th>
+                                                <th className="px-3 py-2 text-right text-xs font-medium text-gray-500 uppercase">GP</th>
+                                                <th className="px-3 py-2 text-right text-xs font-medium text-gray-500 uppercase">A+..A- (Cemerlang)</th>
+                                                <th className="px-3 py-2 text-right text-xs font-medium text-gray-500 uppercase">G (Fail)</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody className="bg-white divide-y divide-gray-200">
+                                            {aggregatedData.classTableData.map(c => (
+                                                <tr key={c.className} className="hover:bg-gray-50">
+                                                    <td className="px-3 py-2 text-sm font-medium text-gray-900">{c.className}</td>
+                                                    <td className="px-3 py-2 text-sm text-gray-700 text-right">{c.total}</td>
+                                                    <td className="px-3 py-2 text-sm text-blue-600 font-bold text-right">{c.gp.toFixed(2)}</td>
+                                                    <td className="px-3 py-2 text-sm text-emerald-600 text-right">{c.A_plus + c.A + c.A_minus}</td>
+                                                    <td className="px-3 py-2 text-sm text-red-600 text-right">{c.G}</td>
+                                                </tr>
+                                            ))}
+                                        </tbody>
+                                    </table>
+                                </div>
+                            </div>
+                        
+                            <div className="min-h-64"> 
+                                <h4 className="font-semibold text-gray-700 mb-2">Overall Grade Distribution (Filter: {aggregatedData.filterLabel})</h4>
+                                <div className="h-[380px]"> 
+                                    <ResponsiveContainer width="100%" height="100%">
+                                        <BarChart data={aggregatedData.overallGradeDistribution} margin={{ top: 20, right: 20, left: 0, bottom: 5 }}>
+                                            <CartesianGrid strokeDasharray="3 3" />
+                                            <XAxis dataKey="name" />
+                                            <YAxis label={{ value: 'Count', angle: -90, position: 'insideLeft' }} />
+                                            <Tooltip formatter={(value) => `${value} Candidates`} />
+                                            <Legend />
+                                            <Bar dataKey="Count" fill="#4B5563">
+                                                <LabelList dataKey="Count" position="top" fill="#4B5563" />
+                                            </Bar>
+                                        </BarChart>
+                                    </ResponsiveContainer>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    {/* SECTION 2: PERFORMANCE GROUPS */}
+                    <div className="bg-white p-6 rounded-xl shadow-sm border">
+                        <h3 className="text-lg font-bold text-gray-800 mb-4">Performance Group Analysis (Filter: {aggregatedData.filterLabel})</h3>
+                        
+                        <div className="grid grid-cols-1 gap-6">
+                            <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-4">
+                                {Object.entries(aggregatedData.groupStats).map(([groupName, stats]) => {
+                                    let color;
+                                    switch(groupName) {
+                                        case 'Cemerlang': color = 'bg-emerald-50 text-emerald-700 border-emerald-200'; break;
+                                        case 'Kepujian': color = 'bg-blue-50 text-blue-700 border-blue-200'; break;
+                                        case 'Lulus': color = 'bg-yellow-50 text-yellow-700 border-yellow-200'; break;
+                                        case 'Gagal': color = 'bg-red-50 text-red-700 border-red-200'; break;
+                                        case 'Tidak Hadir': color = 'bg-gray-50 text-gray-700 border-gray-200'; break;
+                                        default: color = 'bg-white border-gray-200 text-gray-700';
+                                    }
+                                    return (
+                                        <div key={groupName} className={`p-4 rounded-xl border ${color}`}>
+                                            <h4 className="font-bold text-lg">{groupName}</h4>
+                                            <div className="text-2xl font-bold mt-1">{stats.count}</div>
+                                            <p className="text-xs opacity-80">{stats.percentage}% of {aggregatedData.filteredTotalCandidates}</p>
+                                        </div>
+                                    );
+                                })}
+                            </div>
+
+                            <div className="min-h-64 mt-4">
+                                <h4 className="font-semibold text-gray-700 mb-2">Performance Group Percentage Distribution</h4>
+                                <div className="h-[256px]"> 
+                                    <ResponsiveContainer width="100%" height="100%">
+                                        <BarChart data={aggregatedData.groupChartData} margin={{ top: 20, right: 30, left: 20, bottom: 5 }}>
+                                            <CartesianGrid strokeDasharray="3 3" />
+                                            <XAxis dataKey="name" />
+                                            <YAxis domain={[0, 100]} label={{ value: 'Percentage (%)', angle: -90, position: 'insideLeft' }} />
+                                            <Tooltip formatter={(value) => `${value}%`} />
+                                            <Bar dataKey="Percentage" >
+                                                {
+                                                    aggregatedData.groupChartData.map((entry, index) => (
+                                                        <Cell key={`cell-${index}`} fill={entry.color} />
+                                                    ))
+                                                }
+                                                <LabelList dataKey="Percentage" position="top" formatter={(value) => `${value}%`} />
+                                            </Bar>
+                                        </BarChart>
+                                    </ResponsiveContainer>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    {/* SECTION 3: STUDENT NAME LISTS */}
+                    <div className="bg-white rounded-xl shadow-sm border overflow-hidden">
+                        <div className="p-6 border-b flex flex-col md:flex-row justify-between items-center gap-4">
+                            <div>
+                                <h3 className="text-lg font-bold text-gray-800">Student Name Lists for Intervention Planning</h3>
+                                <p className="text-sm text-gray-500">
+                                    Student Name Lists for **{aggregatedData.schoolName}** - **{aggregatedData.filterLabel}**. Use this to identify students for targeted action.
+                                </p>
+                            </div>
+                            <div className="flex items-center gap-3">
+                                <Badge color="bg-blue-100 text-blue-800">Total Filtered: {filteredStudents.length}</Badge>
+                                <button onClick={exportExcel} className="flex items-center px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 shadow-sm transition">
+                                    <Download size={16} className="mr-2" /> Export Excel
+                                </button>
+                            </div>
+                        </div>
+                        
+                        <div className="p-6 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
+                            {Object.entries(studentCategories).filter(([category, students]) => students.length > 0).map(([category, students]) => (
+                                <div key={category} className="border p-3 rounded-lg shadow-sm">
+                                    <h4 className={`font-bold text-sm mb-2 p-1 rounded-md text-white ${category === 'Cemerlang' ? 'bg-emerald-600' : category === 'Kepujian' ? 'bg-blue-600' : category === 'Lulus' ? 'bg-yellow-600' : category === 'Gagal' ? 'bg-red-600' : 'bg-gray-600'}`}>
+                                        {category} ({students.length})
+                                    </h4>
+                                    <div className="overflow-y-auto max-h-48 hide-scrollbar">
+                                        <ul className="space-y-1 text-sm text-gray-800">
+                                            {students.map((s, index) => (
+                                                <li key={index} className="truncate hover:bg-gray-50 p-1 rounded">
+                                                    <span className="font-medium">{s.name}</span> ({s.grade})
+                                                </li>
+                                            ))}
+                                        </ul>
+                                    </div>
+                                </div>
+                            ))}
+                        </div>
+                    </div>
+                </div>
+            );
+        };
+        
+        const TabComparison = ({ sources }) => {
+            const latestSource = useMemo(() => sources.reduce((latest, s) => (s.id > latest.id ? s : latest), sources[0]), [sources]);
+
+            const [selectedSourceId, setSelectedSourceId] = useState(latestSource.id);
+            const [selectedSchool, setSelectedSchool] = useState(
+                (latestSource.summary[0]?.schoolId) || ''
+            );
+            
+            const primarySource = sources.find(s => s.id === selectedSourceId) || latestSource;
+            
+            const [targetGP, setTargetGP] = useState(4.50);
+
+
+            const uniqueSchools = useMemo(() => {
+                const schoolMap = new Map();
+                sources.forEach(s => {
+                    s.summary.forEach(sum => {
+                        if (!schoolMap.has(sum.schoolId)) {
+                            schoolMap.set(sum.schoolId, { id: sum.schoolId, name: sum.schoolName });
+                        }
+                    });
+                });
+                return Array.from(schoolMap.values());
+            }, [sources]);
+
+            const baseRows = useMemo(() => {
+                return selectedSchool 
+                    ? primarySource?.summary?.filter(r => r.schoolId === selectedSchool) || []
+                    : primarySource?.summary || [];
+            }, [primarySource, selectedSchool]);
+
+            const currentGP = calculateWeightedGP(baseRows);
+            const totalCandidatesForGP = baseRows.reduce((a,b)=>a+b.totalCandidates,0);
+
+
+            useEffect(() => {
+                if (!selectedSchool && uniqueSchools.length > 0) {
+                    setSelectedSchool(uniqueSchools[0].id);
+                } else if (selectedSchool && !uniqueSchools.some(s => s.id === selectedSchool)) {
+                     setSelectedSchool(uniqueSchools[0]?.id || '');
+                }
+
+                setTargetGP(parseFloat(currentGP));
+                
+            }, [uniqueSchools, selectedSchool, primarySource]);
+
+
+            const comparisonData = useMemo(() => {
+                return sources.map(s => {
+                    const filteredRows = selectedSchool 
+                        ? s.summary.filter(r => r.schoolId === selectedSchool)
+                        : s.summary; 
+                        
+                    const candidates = filteredRows.reduce((a,b)=>a+b.totalCandidates,0);
+                    
+                    const totalGrades = filteredRows.reduce((acc, row) => {
+                        Object.keys(row.grades).forEach(g => acc[g] = (acc[g] || 0) + (row.grades[g] || 0));
+                        return acc;
+                    }, {});
+
+                    const gp = calculateWeightedGP(filteredRows);
+                    const passed = candidates - (totalGrades['G'] || 0) - (totalGrades['TH'] || 0);
+                    const passRate = candidates ? ((passed / candidates) * 100).toFixed(1) : 0;
+
+                    return {
+                        name: s.name,
+                        GP: parseFloat(gp),
+                        Candidates: candidates,
+                        PassRate: parseFloat(passRate),
+                    };
+                });
+            }, [sources, selectedSchool]);
+            
+            const projectData = useMemo(() => {
+                
+                let currentCounts = grades.reduce((acc, g) => ({ ...acc, [g]: 0 }), {});
+                baseRows.forEach(row => {
+                    Object.keys(currentCounts).forEach(g => {
+                        currentCounts[g] += (row.grades[g] || 0);
+                    });
+                });
+                
+                let simulatedCounts = {...currentCounts};
+                let studentsMoved = 0;
+                
+                const getGP = (counts) => {
+                    let sum = 0;
+                    let total = 0;
+                    Object.entries(counts).forEach(([g, c]) => {
+                        sum += c * (POINTS[g] || 9);
+                        if (g !== 'TH') total += c;
+                    });
+                    return total === 0 ? 0 : sum / total;
+                };
+
+                let simulatedGP = getGP(simulatedCounts);
+                
+                const orderedGradesToImproveFrom = ['G', 'E', 'D', 'C', 'C+', 'B', 'B+', 'A-', 'A']; 
+                const improvementSteps = {'G': 'E', 'E': 'D', 'D': 'C', 'C': 'C+', 'C+': 'B', 'B': 'B+', 'B+': 'A-', 'A': 'A+'};
+
+                let loops = 0;
+                const MAX_LOOPS = totalCandidatesForGP * 4; 
+
+                if (currentGP > targetGP) {
+                    while (simulatedGP > targetGP + 0.0001 && loops < MAX_LOOPS) {
+                        let moveMadeThisRound = false;
+
+                        for (const fromGrade of orderedGradesToImproveFrom) {
+                            if (simulatedGP <= targetGP + 0.0001) break;
+
+                            const toGrade = improvementSteps[fromGrade];
+
+                            if (simulatedCounts[fromGrade] > 0 && toGrade) {
+                                simulatedCounts[fromGrade] -= 1;
+                                simulatedCounts[toGrade] += 1;
+                                studentsMoved++;
+                                moveMadeThisRound = true;
+                                
+                                simulatedGP = getGP(simulatedCounts);
+                                if (simulatedGP <= targetGP + 0.0001) break;
+                            }
+                        }
+
+                        if (!moveMadeThisRound) break;
+                        loops++;
+                    }
+                }
+                
+                const projectionTableData = grades.map(g => ({
+                    grade: g,
+                    current: currentCounts[g] || 0,
+                    target: simulatedCounts[g] || 0,
+                    change: (simulatedCounts[g] || 0) - (currentCounts[g] || 0)
+                }));
+
+
+                return {
+                    baseGP: currentGP,
+                    targetGP: targetGP,
+                    gap: (currentGP - targetGP).toFixed(2),
+                    projectionTableData: projectionTableData,
+                    studentsMoved
+                };
+            }, [baseRows, currentGP, targetGP, totalCandidatesForGP]);
+            
+            const projectionChartData = projectData.projectionTableData
+                .filter(d => d.grade !== 'TH')
+                .map(d => ({
+                    name: d.grade,
+                    Current: d.current,
+                    Target: d.target,
+                }));
+
+
+            return (
+                <div className="space-y-8 animate-fade-in">
+                    
+                    {/* TOP SLICERS for Tab 3 Analysis */}
+                    <div className="bg-white p-4 rounded-xl shadow-sm border h-fit space-y-3 md:flex md:space-y-0 gap-4">
+                        <div className="flex-1">
+                            <label className="block text-sm font-medium text-gray-700 mb-1">Select Primary Source</label>
+                            <select 
+                                className="w-full border-gray-300 rounded-md shadow-sm focus:border-blue-500 focus:ring-blue-500 p-2 border"
+                                value={selectedSourceId}
+                                onChange={(e) => setSelectedSourceId(parseInt(e.target.value))}
+                            >
+                                {sources.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
+                            </select>
+                        </div>
+                        <div className="flex-1">
+                            <label className="block text-sm font-medium text-gray-700 mb-1">Filter by School</label>
+                            <select 
+                                className="w-full border-gray-300 rounded-md shadow-sm focus:border-blue-500 focus:ring-blue-500 p-2 border"
+                                value={selectedSchool}
+                                onChange={(e) => setSelectedSchool(e.target.value)}
+                                disabled={uniqueSchools.length === 0}
+                            >
+                                {uniqueSchools.length === 0 && <option value="">No Schools Available</option>}
+                                {uniqueSchools.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
+                            </select>
+                        </div>
+                    </div>
+
+
+                    {/* SECTION 1: Overall Comparison */}
+                    <div className="bg-white p-6 rounded-xl shadow-sm border">
+                        <h3 className="text-lg font-bold text-gray-800 mb-4">Overall GP Comparison by Source ({uniqueSchools.find(s => s.id === selectedSchool)?.name})</h3>
+                        <div className="h-80">
+                            <ResponsiveContainer width="100%" height="100%">
+                                <BarChart data={comparisonData}>
+                                    <CartesianGrid strokeDasharray="3 3" />
+                                    <XAxis dataKey="name" />
+                                    <YAxis domain={[0, 9]} reversed label={{ value: 'GP (Lower=Better)', angle: -90, position: 'insideLeft' }} />
+                                    <Tooltip formatter={(value, name) => [value.toFixed(2), name]} />
+                                    <Legend />
+                                    <Bar dataKey="GP" name="Grade Purata" fill="#3B82F6" barSize={50}>
+                                         <LabelList dataKey="GP" position="top" formatter={(value) => value.toFixed(2)} fill="#3B82F6" />
+                                    </Bar>
+                                </BarChart>
+                            </ResponsiveContainer>
+                        </div>
+
+                        <div className="overflow-x-auto mt-6">
+                            <h4 className="font-semibold text-gray-700 mb-2">Source Summary (Filtered by School)</h4>
+                            <table className="min-w-full divide-y divide-gray-200 border rounded-lg">
+                                <thead className="bg-gray-50">
+                                    <tr>
+                                        <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">Source</th>
+                                        <th className="px-4 py-2 text-right text-xs font-medium text-gray-500 uppercase">GP</th>
+                                        <th className="px-4 py-2 text-right text-xs font-medium text-gray-500 uppercase">Pass Rate (%)</th>
+                                        <th className="px-4 py-2 text-right text-xs font-medium text-gray-500 uppercase">Total Candidates</th>
+                                    </tr>
+                                </thead>
+                                <tbody className="bg-white divide-y divide-gray-200">
+                                    {comparisonData.map((d, index) => (
+                                        <tr key={index} className="hover:bg-gray-50">
+                                            <td className="px-4 py-2 text-sm font-medium text-gray-900">{d.name}</td>
+                                            <td className="px-4 py-2 text-sm text-right font-bold">{d.GP.toFixed(2)}</td>
+                                            <td className="px-4 py-2 text-sm text-right">{d.PassRate}%</td>
+                                            <td className="px-4 py-2 text-sm text-right">{d.Candidates}</td>
+                                        </tr>
+                                    ))}
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                    
+                    {/* SECTION 2 & 3: KPI Analysis and Projection */}
+                    <div className="bg-white p-6 rounded-xl shadow-sm border">
+                        <h3 className="text-lg font-bold text-gray-800 mb-4">KPI Analysis & Suggested Grade Projection ({primarySource?.name})</h3>
+
+                        <div className="flex items-center gap-4 mb-6 p-4 bg-gray-50 rounded-lg border">
+                            <label className="text-sm font-medium text-gray-700 mb-1">Set Projection Target GP:</label>
+                            <input 
+                                type="number" 
+                                step="0.01" 
+                                value={targetGP} 
+                                onChange={(e) => setTargetGP(parseFloat(e.target.value))}
+                                className="w-24 p-2 border rounded-md text-center font-bold"
+                            />
+                            <p className="text-xs text-gray-500">
+                                Analyzing {primarySource?.name} data for {uniqueSchools.find(s => s.id === selectedSchool)?.name}.
+                            </p>
+                        </div>
+                        
+                        <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-8">
+                            <KpiCard 
+                                title="Current GP" 
+                                value={projectData.baseGP.toFixed(2)} 
+                                color="bg-blue-50 border-blue-200"
+                            />
+                            <KpiCard 
+                                title="Target GP" 
+                                value={projectData.targetGP.toFixed(2)} 
+                                color="bg-purple-50 border-purple-200"
+                            />
+                            <KpiCard 
+                                title="GP Gap (Current - Target)" 
+                                value={projectData.gap} 
+                                subtext={projectData.gap > 0 ? "Needs improvement (Current GP is higher)" : "Target met or exceeded (Current GP is lower)"}
+                                color={projectData.gap > 0 ? "bg-red-50 border-red-200" : "bg-green-50 border-green-200"}
+                                icon={projectData.gap > 0 ? <TrendingUp size={20} className="text-red-500"/> : <TrendingDown size={20} className="text-green-500"/>}
+                            />
+                        </div>
+
+                        <h4 className="font-semibold text-gray-700 mb-4">Suggested Grade Shifts to Meet Target GP ({projectData.targetGP.toFixed(2)})</h4>
+                        
+                        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                            <div className="overflow-x-auto">
+                                <table className="min-w-full divide-y divide-gray-200 border rounded-lg">
+                                    <thead className="bg-gray-50">
+                                        <tr>
+                                            <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase">Grade</th>
+                                            <th className="px-3 py-2 text-right text-xs font-medium text-gray-500 uppercase">Current Count</th>
+                                            <th className="px-3 py-2 text-right text-xs font-medium text-gray-500 uppercase">Target Count</th>
+                                            <th className="px-3 py-2 text-center text-xs font-medium text-gray-500 uppercase">Change (+/-)</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody className="bg-white divide-y divide-gray-200">
+                                        {projectData.projectionTableData.map(d => (
+                                            <tr key={d.grade} className="hover:bg-gray-50">
+                                                <td className="px-3 py-2 text-sm font-medium text-gray-900">{d.grade}</td>
+                                                <td className="px-3 py-2 text-sm text-gray-700 text-right">{d.current}</td>
+                                                <td className="px-3 py-2 text-sm text-gray-700 text-right">{d.target}</td>
+                                                <td className={`px-3 py-2 text-sm text-center font-bold ${d.change > 0 ? 'text-green-600' : d.change < 0 ? 'text-red-600' : 'text-gray-500'}`}>
+                                                    {d.change > 0 ? `+${d.change}` : d.change}
+                                                </td>
+                                            </tr>
+                                        ))}
+                                    </tbody>
+                                </table>
+                                <p className="text-xs text-gray-500 mt-2">Simulated minimum students needed to improve grade: <span className="font-bold text-blue-600">{projectData.studentsMoved}</span> (if current GP > target GP).</p>
+                            </div>
+
+                            <div className="h-[400px]">
+                                <h4 className="font-semibold text-gray-700 mb-2">Current vs. Target Distribution</h4>
+                                <ResponsiveContainer width="100%" height="90%">
+                                    <BarChart data={projectionChartData} margin={{ top: 20, right: 10, left: -10, bottom: 5 }}>
+                                        <CartesianGrid strokeDasharray="3 3" />
+                                        <XAxis dataKey="name" />
+                                        <YAxis label={{ value: 'Count', angle: -90, position: 'insideLeft' }} />
+                                        <Tooltip />
+                                        <Legend />
+                                        <Bar dataKey="Current" fill="#3B82F6" />
+                                        <Bar dataKey="Target" fill="#10B980" />
+                                    </BarChart>
+                                </ResponsiveContainer>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            );
+        };
+        
+        const TabSWOT = ({ userData, userId, onUpdate, globalKpiTarget, sources, canEdit }) => {
+            
+            const uniqueSchools = useMemo(() => {
+                return sources.flatMap(s => s.summary.map(r => ({ id: r.schoolId, name: r.schoolName })))
+                              .filter((v, i, a) => a.findIndex(t => t.id === v.id) === i);
+            }, [sources]);
+
+            const [selectedSchool, setSelectedSchool] = useState(uniqueSchools[0]?.id || '');
+
+            useEffect(() => {
+                if (!selectedSchool && uniqueSchools.length > 0) {
+                    setSelectedSchool(uniqueSchools[0].id);
+                }
+            }, [uniqueSchools, selectedSchool]);
+
+            const currentSchoolId = selectedSchool;
+
+            const latestCalculatedGP = useMemo(() => {
+                if (!currentSchoolId) return 9.00;
+                const latestSource = sources.reduce((latest, s) => (s.id > latest.id ? s : latest), sources[0]);
+                const schoolRows = latestSource.summary.filter(r => r.schoolId === currentSchoolId);
+                return calculateWeightedGP(schoolRows);
+            }, [currentSchoolId, sources]);
+
+            const schoolSwot = useMemo(() => {
+                 const existingPlan = (userData && userData[currentSchoolId]) || {};
+                 
+                 let defaultTarget = existingPlan.schoolKpiTarget;
+                 if (defaultTarget === undefined) {
+                      defaultTarget = latestCalculatedGP || 4.50;
+                 }
+
+                 return {
+                     schoolKpiTarget: parseFloat(defaultTarget),
+                     strengths: existingPlan.strengths || [{ id: 1, text: 'The school has strong student leadership involvement.' }], 
+                     weaknesses: existingPlan.weaknesses || [], 
+                     opportunities: existingPlan.opportunities || [], 
+                     threats: existingPlan.threats || []
+                 };
+            }, [currentSchoolId, userData, latestCalculatedGP]);
+
+
+            const updateSchoolSwot = (newPlanPartial) => {
+                const updatedPlan = { ...schoolSwot, ...newPlanPartial };
+                onUpdate(currentSchoolId, updatedPlan);
+            };
+
+            const setSchoolKpiTarget = (newTarget) => {
+                 updateSchoolSwot({ schoolKpiTarget: newTarget });
+            };
+
+            const addItem = (category) => {
+                const currentItems = schoolSwot[category] || [];
+                const newId = currentItems.length ? Math.max(...currentItems.map(item => item.id)) + 1 : 1;
+                updateSchoolSwot({
+                    [category]: [...currentItems, { id: newId, text: '' }]
+                });
+            };
+
+            const updateItemText = (category, id, newText) => {
+                const currentItems = schoolSwot[category] || [];
+                updateSchoolSwot({
+                    [category]: currentItems.map(item => 
+                        item.id === id ? { ...item, text: newText } : item
+                    )
+                });
+            };
+
+            const deleteItem = (category, id) => {
+                const currentItems = schoolSwot[category] || [];
+                updateSchoolSwot({
+                    [category]: currentItems.filter(item => item.id !== id)
+                });
+            };
+            
+            const schoolTarget = parseFloat(schoolSwot.schoolKpiTarget);
+            const globalTarget = parseFloat(globalKpiTarget);
+
+            const kpiGap = schoolTarget - globalTarget;
+            const kpiGapFormatted = kpiGap.toFixed(2);
+            const kpiStatus = kpiGap > 0.01 ? 'Worse (Higher GP)' : kpiGap < -0.01 ? 'Better (Lower GP)' : 'On Target';
+
+            const generateTextContent = () => {
+                const schoolName = uniqueSchools.find(s => s.id === currentSchoolId)?.name || 'N/A';
+                let content = `WAYFORWARD SWOT ANALYSIS - ${schoolName}\n`;
+                content += `--------------------------------------------------\n`;
+                content += `School KPI Target GP (Set): ${schoolTarget.toFixed(2)}\n`;
+                content += `Latest Calculated GP: ${latestCalculatedGP.toFixed(2)}\n`;
+                content += `Global System KPI: ${globalTarget.toFixed(2)}\n`;
+                content += `KPI ALIGNMENT GAP (School Target - Global Target): ${kpiGapFormatted}\n\n`;
+                
+                Object.entries(schoolSwot).forEach(([category, items]) => {
+                    if (category === 'schoolKpiTarget') return;
+                    content += `--- ${category.toUpperCase()} ---\n`;
+                    if (Array.isArray(items) && items.length) {
+                        items.forEach((item, index) => {
+                            if (item.text.trim()) {
+                                content += `${index + 1}. ${item.text.trim()}\n`;
+                            }
+                        });
+                    } else {
+                        content += "No items added.\n";
+                    }
+                    content += "\n";
+                });
+                return content;
+            };
+
+            const downloadAsText = () => {
+                const content = generateTextContent();
+                const blob = new Blob([content], { type: 'text/plain;charset=utf-8' });
+                const link = document.createElement('a');
+                link.href = URL.createObjectURL(blob);
+                link.download = `SWOT_Analysis_${currentSchoolId}.txt`;
+                document.body.appendChild(link);
+                link.click();
+                document.body.removeChild(link);
+            };
+
+            const downloadAsExcel = () => {
+                if (!window.XLSX) return alert("SheetJS not loaded");
+                
+                const wb = XLSX.utils.book_new();
+                const schoolName = uniqueSchools.find(s => s.id === currentSchoolId)?.name || 'N/A';
+
+                 const kpiSheetData = [
+                    ['Metric', 'Value'],
+                    ['Global KPI Target GP', globalTarget.toFixed(2)],
+                    ['School KPI Target GP (Set)', schoolTarget.toFixed(2)],
+                    ['Latest Calculated GP', latestCalculatedGP.toFixed(2)],
+                    ['Alignment Gap (School Target - Global Target)', kpiGapFormatted]
+                ];
+                XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(kpiSheetData), "KPI_Comparison");
+
+                const swotSheetData = [
+                    ['Category', 'Item No.', 'Description']
+                ];
+                Object.entries(schoolSwot).forEach(([category, items]) => {
+                    if (category === 'schoolKpiTarget') return;
+                    if (Array.isArray(items)) {
+                        items.forEach((item, index) => {
+                            if (item.text.trim()) {
+                                swotSheetData.push([category, index + 1, item.text.trim()]);
+                            }
+                        });
+                    }
+                });
+
+                const ws = XLSX.utils.aoa_to_sheet(swotSheetData);
+                XLSX.utils.book_append_sheet(wb, ws, "SWOT_Plan");
+                XLSX.writeFile(wb, `SWOT_Analysis_${currentSchoolId}.xlsx`);
+            };
+
+
+            return (
+                <div className="h-full flex flex-col">
+                    <div className="mb-6 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
+                        <div>
+                            <h3 className="text-lg font-bold text-gray-800">Wayforward SWOT Analysis</h3>
+                            <p className="text-sm text-gray-500">
+                                Currently editing SWOT plan for **{uniqueSchools.find(s => s.id === currentSchoolId)?.name || 'Select School'}**. Changes auto-save in real-time.
+                            </p>
+                        </div>
+                        <div className="flex gap-2">
+                            <button onClick={downloadAsText} className="flex items-center px-3 py-2 bg-gray-200 text-gray-800 rounded-lg hover:bg-gray-300 text-sm font-medium">
+                                <FileText size={16} className="mr-1" /> Export Text
+                            </button>
+                            <button onClick={downloadAsExcel} className="flex items-center px-3 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 text-sm font-medium">
+                                <Download size={16} className="mr-1" /> Export XLS
+                            </button>
+                        </div>
+                    </div>
+
+                    {/* School Filter & Global KPI Input */}
+                    <div className="bg-white p-4 rounded-xl shadow-sm border mb-6 space-y-3 md:flex md:space-y-0 gap-4">
+                        <div className="flex-1">
+                            <label className="block text-sm font-medium text-gray-700 mb-1">Select School</label>
+                            <select 
+                                className="w-full border-gray-300 rounded-md shadow-sm focus:border-blue-500 focus:ring-blue-500 p-2 border"
+                                value={selectedSchool}
+                                onChange={(e) => setSelectedSchool(e.target.value)}
+                                disabled={uniqueSchools.length === 0}
+                            >
+                                {uniqueSchools.length === 0 && <option value="">No Schools Available</option>}
+                                {uniqueSchools.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
+                            </select>
+                        </div>
+                        <div className="flex-1">
+                            <h4 className="text-sm font-medium text-gray-700 mb-1 uppercase">Set School KPI Target GP</h4>
+                            <input 
+                                type="number" 
+                                step="0.01" 
+                                value={schoolTarget} 
+                                onChange={(e) => setSchoolKpiTarget(parseFloat(e.target.value))}
+                                disabled={!canEdit}
+                                className="w-full p-2 border rounded-md text-center font-bold text-lg text-blue-900 focus:ring-blue-500 disabled:bg-gray-100"
+                            />
+                            <p className="text-xs text-gray-500 mt-1">Latest Calculated GP: {latestCalculatedGP.toFixed(2)}</p>
+                        </div>
+                        <div className="flex-1 p-2 rounded-lg border bg-blue-50/50">
+                             <h4 className="text-sm font-bold text-gray-700 mb-1 uppercase">Alignment with Global KPI ({globalTarget.toFixed(2)})</h4>
+                             <p className={`text-lg font-bold ${kpiGap > 0.01 ? 'text-red-600' : kpiGap < -0.01 ? 'text-green-600' : 'text-gray-900'}`}>
+                                 {kpiGapFormatted} GP Gap
+                             </p>
+                             <p className={`text-xs ${kpiGap > 0.01 ? 'text-red-700' : kpiGap < -0.01 ? 'text-green-700' : 'text-gray-600'}`}>
+                                 Status: {kpiStatus}
+                             </p>
+                        </div>
+                    </div>
+                    
+
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-6 flex-1">
+                        <SwotCard title="Strengths (Kekuatan)" category="strengths" color="bg-green-50 border-green-200 text-green-800" items={schoolSwot.strengths} onAdd={addItem} onUpdate={updateItemText} onDelete={deleteItem} canEdit={canEdit} />
+                        <SwotCard title="Weaknesses (Kelemahan)" category="weaknesses" color="bg-red-50 border-red-200 text-red-800" items={schoolSwot.weaknesses} onAdd={addItem} onUpdate={updateItemText} onDelete={deleteItem} canEdit={canEdit} />
+                        <SwotCard title="Opportunities (Peluang)" category="opportunities" color="bg-blue-50 border-blue-200 text-blue-800" items={schoolSwot.opportunities} onAdd={addItem} onUpdate={updateItemText} onDelete={deleteItem} canEdit={canEdit} />
+                        <SwotCard title="Threats (Ancaman)" category="threats" color="bg-yellow-50 border-yellow-200 text-yellow-800" items={schoolSwot.threats} onAdd={addItem} onUpdate={updateItemText} onDelete={deleteItem} canEdit={canEdit} />
+                    </div>
+                </div>
+            );
+        };
+        
+        const TabIntervention = ({ userData, userId, onUpdate, sources, activeSource }) => {
+            const uniqueSchools = useMemo(() => {
+                return sources.flatMap(s => s.summary.map(r => ({ id: r.schoolId, name: r.schoolName })))
+                              .filter((v, i, a) => a.findIndex(t => t.id === v.id) === i);
+            }, [sources]);
+            
+            const [selectedSchool, setSelectedSchool] = useState(uniqueSchools[0]?.id || '');
+            
+            useEffect(() => {
+                if (!selectedSchool && uniqueSchools.length > 0) {
+                    setSelectedSchool(uniqueSchools[0].id);
+                }
+            }, [uniqueSchools, selectedSchool]);
+
+            const currentSchoolId = selectedSchool;
+            const currentIntervention = userData[currentSchoolId] || {
+                trailblazers: [{id: 1, text: 'Maintain high momentum through peer tutoring.'}], 
+                risingStars: [], comeback: [], rescue: []
+            };
+
+            const setCurrentIntervention = (newPlan) => {
+                 onUpdate(currentSchoolId, newPlan);
+            };
+
+            // Get students for this school from active source
+            const students = useMemo(() => {
+                const schoolName = uniqueSchools.find(s => s.id === currentSchoolId)?.name;
+                return activeSource.students.filter(s => s.school === schoolName);
+            }, [activeSource, currentSchoolId, uniqueSchools]);
+
+            // Categorize Students
+            const squads = useMemo(() => {
+                return {
+                    trailblazers: students.filter(s => GRADE_CATEGORIES['Cemerlang'].includes(s.grade)),
+                    risingStars: students.filter(s => GRADE_CATEGORIES['Kepujian'].includes(s.grade)),
+                    comeback: students.filter(s => GRADE_CATEGORIES['Lulus'].includes(s.grade)),
+                    rescue: students.filter(s => GRADE_CATEGORIES['Gagal'].includes(s.grade) || GRADE_CATEGORIES['Tidak Hadir'].includes(s.grade))
+                };
+            }, [students]);
+
+             // Handlers
+            const addItem = (category) => {
+                const currentItems = currentIntervention[category] || [];
+                const newId = currentItems.length ? Math.max(...currentItems.map(item => item.id)) + 1 : 1;
+                setCurrentIntervention({
+                    ...currentIntervention,
+                    [category]: [...currentItems, { id: newId, text: '' }]
+                });
+            };
+
+            const updateItem = (category, id, newText) => {
+                setCurrentIntervention({
+                    ...currentIntervention,
+                    [category]: currentIntervention[category].map(item => 
+                        item.id === id ? { ...item, text: newText } : item
+                    )
+                });
+            };
+
+            const deleteItem = (category, id) => {
+                setCurrentIntervention({
+                    ...currentIntervention,
+                    [category]: currentIntervention[category].filter(item => item.id !== id)
+                });
+            };
+
+            const downloadList = (category) => {
+                 const list = squads[category];
+                 if (!window.XLSX) return alert("SheetJS not loaded");
+                 const wb = XLSX.utils.book_new();
+                 const wsData = [['Student Name', 'Class', 'Grade', 'Mark']];
+                 list.forEach(s => wsData.push([s.name, s.className, s.grade, s.mark]));
+                 const ws = XLSX.utils.aoa_to_sheet(wsData);
+                 XLSX.utils.book_append_sheet(wb, ws, category.toUpperCase());
+                 XLSX.writeFile(wb, `${currentSchoolId}_${category}_Students.xlsx`);
+            };
+
+            return (
+                 <div className="space-y-8 animate-fade-in h-full flex flex-col">
+                    <div className="bg-white p-4 rounded-xl shadow-sm border h-fit space-y-3 w-full md:w-1/3">
+                        <h3 className="text-lg font-bold text-gray-800">Intervention Plan for:</h3>
+                        <label className="block text-sm font-medium text-gray-700 mb-1">Select School</label>
+                        <select 
+                            className="w-full border-gray-300 rounded-md shadow-sm focus:border-blue-500 focus:ring-blue-500 p-2 border"
+                            value={selectedSchool}
+                            onChange={(e) => setSelectedSchool(e.target.value)}
+                            disabled={uniqueSchools.length === 0}
+                        >
+                            {uniqueSchools.length === 0 && <option value="">No Schools Available</option>}
+                            {uniqueSchools.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
+                        </select>
+                        <p className="text-xs text-gray-500 mt-2">Active Data Source: {activeSource.name}</p>
+                    </div>
+
+                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 flex-1 h-[600px]">
+                        <InterventionCard 
+                            title="Trailblazers (High)" 
+                            category="trailblazers" 
+                            color="bg-emerald-50 border-emerald-200 text-emerald-900" 
+                            items={currentIntervention.trailblazers} 
+                            studentList={squads.trailblazers}
+                            onAdd={addItem} onUpdate={updateItem} onDelete={deleteItem} onDownload={downloadList}
+                        />
+                         <InterventionCard 
+                            title="Rising Stars (Mid)" 
+                            category="risingStars" 
+                            color="bg-blue-50 border-blue-200 text-blue-900" 
+                            items={currentIntervention.risingStars} 
+                             studentList={squads.risingStars}
+                            onAdd={addItem} onUpdate={updateItem} onDelete={deleteItem} onDownload={downloadList}
+                        />
+                         <InterventionCard 
+                            title="Comeback Squad (Low)" 
+                            category="comeback" 
+                            color="bg-yellow-50 border-yellow-200 text-yellow-900" 
+                            items={currentIntervention.comeback} 
+                             studentList={squads.comeback}
+                            onAdd={addItem} onUpdate={updateItem} onDelete={deleteItem} onDownload={downloadList}
+                        />
+                         <InterventionCard 
+                            title="Rescue Squad (Fail/TH)" 
+                            category="rescue" 
+                            color="bg-red-50 border-red-200 text-red-900" 
+                            items={currentIntervention.rescue} 
+                             studentList={squads.rescue}
+                            onAdd={addItem} onUpdate={updateItem} onDelete={deleteItem} onDownload={downloadList}
+                        />
+                    </div>
+                 </div>
+            );
+        };
+
+        const TabAdmin = ({ swotData, sources, updateGlobalKpiTarget, globalKpiTarget, interventionData }) => {
+            
+            const downloadAllKpiAndSwot = () => {
+                if (!window.XLSX) return alert("SheetJS not loaded");
+                
+                const wb = XLSX.utils.book_new();
+
+                // --- SWOT Sheet ---
+                const swotSheetData = [
+                    ['School ID', 'School Name', 'Category', 'Item No.', 'Description']
+                ];
+                
+                // Assuming swotData is already keyed by schoolId
+                Object.entries(swotData).forEach(([schoolId, schoolPlan]) => {
+                    const sourceData = sources.flatMap(s => s.summary).find(r => r.schoolId === schoolId);
+                    const schoolName = sourceData ? sourceData.schoolName : `Unknown School (${schoolId})`;
+
+                    Object.entries(schoolPlan).forEach(([category, items]) => {
+                        if (category === 'schoolKpiTarget') return; 
+                        if (Array.isArray(items)) {
+                            items.forEach((item, index) => {
+                                if (item.text.trim()) {
+                                    swotSheetData.push([schoolId, schoolName, category, index + 1, item.text.trim()]);
+                                }
+                            });
+                        }
+                    });
+                });
+                XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(swotSheetData), "SWOT_Plans_Per_School");
+                
+                // --- Intervention Data Sheet ---
+                const interventionSheetData = [
+                    ['School ID', 'School Name', 'Squad', 'Intervention Details']
+                ];
+                if(interventionData) {
+                    // Assuming interventionData is keyed by schoolId
+                    Object.entries(interventionData).forEach(([schoolId, data]) => {
+                        const sourceData = sources.flatMap(s => s.summary).find(r => r.schoolId === schoolId);
+                        const schoolName = sourceData ? sourceData.schoolName : schoolId;
+
+                         ['trailblazers', 'risingStars', 'comeback', 'rescue'].forEach(cat => {
+                             if(data[cat]) {
+                                 data[cat].forEach(i => {
+                                     if(i.text) interventionSheetData.push([schoolId, schoolName, cat, i.text]);
+                                 });
+                             }
+                         });
+                    });
+                }
+                XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(interventionSheetData), "All_Interventions");
+                
+                // --- KPI Data Summary Sheet ---
+                const kpiSheetData = [
+                    ['Global KPI Target GP', globalKpiTarget.toFixed(2)],
+                    [],
+                    ['Source ID', 'Source Name', 'School ID', 'School Name', 'Latest Calculated GP', 'School KPI Target (Set in SWOT)']
+                ];
+                
+                const latestSource = sources.reduce((latest, s) => (s.id > latest.id ? s : latest), sources[0]);
+
+                const uniqueSchools = [...new Set(sources.flatMap(s => s.summary).map(r => r.schoolId))];
+                
+                uniqueSchools.forEach(schoolId => {
+                     const schoolInfo = sources.flatMap(s => s.summary).find(r => r.schoolId === schoolId);
+                     const schoolName = schoolInfo ? schoolInfo.schoolName : `Unknown School (${schoolId})`;
+                     
+                     const latestGPRows = latestSource.summary.filter(r => r.schoolId === schoolId);
+                     const latestGP = calculateWeightedGP(latestGPRows);
+                     
+                     let schoolTarget = latestGP;
+                     
+                     if(swotData[schoolId]?.schoolKpiTarget) {
+                         schoolTarget = parseFloat(swotData[schoolId].schoolKpiTarget);
+                     }
+
+                     kpiSheetData.push([
+                        latestSource.id,
+                        latestSource.name,
+                        schoolId,
+                        schoolName,
+                        latestGP.toFixed(2),
+                        schoolTarget.toFixed(2)
+                     ]);
+                });
+
+                XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(kpiSheetData), "KPI_Data_Summary");
+                XLSX.writeFile(wb, "Admin_Data_Export_KPI_SWOT.xlsx");
+            };
+
+            return (
+                <div className="space-y-8 animate-fade-in">
+                    <h2 className="text-xl font-bold text-gray-800">System Data Management</h2>
+
+                    {/* Download Section */}
+                    <div className="bg-white p-6 rounded-xl shadow-sm border">
+                        <h4 className="font-semibold text-gray-700 mb-3">Global KPI Settings</h4>
+                         <div className="flex flex-col sm:flex-row items-start sm:items-center gap-4 mb-6">
+                            <label className="text-sm font-medium text-gray-700 whitespace-nowrap">Global KPI Target GP:</label>
+                            <input 
+                                type="number" 
+                                step="0.01" 
+                                value={globalKpiTarget} 
+                                onChange={(e) => updateGlobalKpiTarget(e.target.value)}
+                                className="w-24 p-1 border rounded-md text-center font-bold bg-gray-50 focus:ring-purple-500 focus:border-purple-500"
+                            />
+                            <span className="text-xs text-gray-500">(This target is synced across all users and used as the benchmark.)</span>
+                        </div>
+                        
+                        <h4 className="font-semibold text-gray-700 mt-4 mb-3">Data Export</h4>
+                        <button onClick={downloadAllKpiAndSwot} className="flex items-center px-4 py-2 bg-purple-600 text-white rounded-lg hover:bg-purple-700 text-sm font-medium shadow-sm">
+                            <Download size={16} className="mr-2" /> Download All Data (KPI, SWOT, Intervention)
+                        </button>
+                        <p className="text-xs text-gray-500 mt-2">Exports aggregated KPI data, all user-created SWOT plans, and intervention details to a multi-sheet Excel file.</p>
+                    </div>
+
+
+                    {/* User Management Section (Simplified/Removed for Canvas environment) */}
+                    <div className="bg-white p-6 rounded-xl shadow-sm border">
+                        <h4 className="font-semibold text-gray-700 mb-4">User Accounts (Managed via Firebase Console)</h4>
+                        <p className="text-sm text-gray-600">User management features (add/delete/reset password) have been removed as they require backend integration or reliance on external Canvas environment features, which are not available in a portable single-file structure using Firebase auth tokens.</p>
+                    </div>
+                </div>
+            );
+        };
+
+
         // --- MAIN APP ---
         const App = () => {
             const [isAuthReady, setIsAuthReady] = useState(false);
@@ -732,7 +2250,7 @@
 
                     if (!adminDoc.exists()) {
                         // Case 1: FIRST LOGGER (Set current user as Admin)
-                        // Allow BOTH non-anonymous (token user) AND anonymous user to be the first admin
+                        // This applies to the first user, whether they are authenticated via token or anonymously.
                         await window.firebase.setDoc(adminDocRef, { 
                             uid: loggedInUser.uid, 
                             isAnonymous: loggedInUser.isAnonymous,
@@ -816,7 +2334,20 @@
                 // --- 2a. Sources Listener (Public/Global Data) ---
                 const sourcesRef = window.firebase.collection(window.db, `artifacts/${window.appId}/public/data/sources`);
                 const unsubscribeSources = window.firebase.onSnapshot(sourcesRef, (snapshot) => {
-                    const newSources = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+                    const newSources = snapshot.docs.map(doc => {
+                        const data = doc.data();
+                        // Deserialize summary and students array before setting state
+                        try {
+                            data.summary = JSON.parse(data.summary);
+                            data.students = JSON.parse(data.students);
+                        } catch (e) {
+                            console.error("Error parsing serialized data:", e);
+                            // Set to empty arrays if parsing fails
+                            data.summary = [];
+                            data.students = [];
+                        }
+                        return { id: doc.id, ...data };
+                    });
                     
                     if (newSources.length === 0) {
                         seedInitialData();
@@ -878,8 +2409,12 @@
 
                 INITIAL_SOURCES.forEach((source) => {
                     const newDocRef = window.firebase.doc(sourcesRef); 
+                    
+                    // Serialize complex arrays for Firestore compliance
                     const sourceToSave = { 
                         ...source,
+                        summary: JSON.stringify(source.summary), 
+                        students: JSON.stringify(source.students),
                         id: newDocRef.id, 
                         status: 'ready',
                         updatedAt: Date.now()
@@ -899,17 +2434,18 @@
 
             // --- CUD (Create, Update, Delete) Handlers ---
 
-            const handleAddNewSource = async (name, url) => {
+            const handleAddNewSource = async (name, parsedData) => {
                 if (userRole !== 'admin') throw new Error("Permission denied.");
 
-                const newMockData = GENERATE_FROM_CSV_SNIPPETS(); 
-                const newPreviousGP = parseFloat((INITIAL_SOURCES[0].previousGP + (Math.random() * 0.5 - 0.25)).toFixed(2));
+                // Use the parsed data instead of generating mock data
+                const newPreviousGP = parseFloat(Math.random() * 9).toFixed(2); // Mock previous GP for the comparison tab logic
                 
                 const sourceData = {
                     name: name,
                     previousGP: newPreviousGP,
-                    summary: newMockData.summary,
-                    students: newMockData.students,
+                    // Serialize data before writing to Firestore
+                    summary: JSON.stringify(parsedData.summary),
+                    students: JSON.stringify(parsedData.students),
                     status: 'ready',
                     updatedAt: Date.now()
                 };
@@ -1046,7 +2582,7 @@
                                         className="group flex items-center w-full px-3 py-2 rounded-lg cursor-pointer transition-colors text-blue-400 hover:bg-slate-800 hover:text-white border border-dashed border-slate-700 mt-2"
                                     >
                                         <PlusCircle size={18} className="mr-3" />
-                                        <span className="text-sm font-medium">Add New Source (Mock CSV)</span>
+                                        <span className="text-sm font-medium">Add New Source (CSV/XLSX)</span>
                                     </button>
                                 )}
                             </div>
