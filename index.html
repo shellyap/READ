@@ -1,935 +1,640 @@
-<!doctype html>
-<html lang="en" class="h-full">
- <head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>R.E.A.D Analytics Dashboard</title><!-- Tailwind CSS -->
-  <script src="https://cdn.tailwindcss.com"></script><!-- React & ReactDOM -->
-  <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
-  <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script><!-- Babel Standalone -->
-  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script><!-- Recharts -->
-  <script src="https://unpkg.com/recharts@2.10.3/dist/Recharts.js"></script><!-- SheetJS -->
-  <script src="https://cdn.sheetjs.com/xlsx-latest/package/dist/xlsx.full.min.js"></script><!-- Firebase v11 -->
-  <script type="module">
-        import { initializeApp } from 'https://www.gstatic.com/firebasejs/11.0.1/firebase-app.js';
-        import { getFirestore, doc, setDoc, getDoc, updateDoc, onSnapshot, collection, addDoc, deleteDoc, writeBatch, query, orderBy } from 'https://www.gstatic.com/firebasejs/11.0.1/firebase-firestore.js';
-        import { getAuth, signInAnonymously } from 'https://www.gstatic.com/firebasejs/11.0.1/firebase-auth.js';
-        
-        // Firebase configuration
-        const firebaseConfig = {
-            apiKey: "AIzaSyDOMGkWG-7-Hmv4m3reUNr-AJA4hUTMPnY",
-            authDomain: "read-6034d.firebaseapp.com",
-            databaseURL: "https://read-6034d-default-rtdb.asia-southeast1.firebasedatabase.app",
-            projectId: "read-6034d",
-            storageBucket: "read-6034d.firebasestorage.app",
-            messagingSenderId: "282456310870",
-            appId: "1:282456310870:web:17d1d0488cf1a9d4bda7f7",
-            measurementId: "G-4SD732BSHW"
-        };
-        
-        const app = initializeApp(firebaseConfig);
-        const db = getFirestore(app);
-        const auth = getAuth(app);
-        
-        // Sign in anonymously
-        signInAnonymously(auth).then(() => {
-            console.log('Authenticated successfully');
-        });
-        
-        // Expose to window for React components
-        window.firebaseDb = db;
-        window.firebaseAuth = auth;
-        window.firebaseModules = { doc, setDoc, getDoc, updateDoc, onSnapshot, collection, addDoc, deleteDoc, writeBatch, query, orderBy };
-    </script>
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>R.E.A.D. – Ranau English Analytics Dashboard (Live)</title>
+
+  <!-- Tailwind -->
+  <script src="https://cdn.tailwindcss.com"></script>
+
+  <!-- React / ReactDOM (UMD builds) -->
+  <script crossorigin src="https://unpkg.com/react@18/umd/react.development.js"></script>
+  <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+
+  <!-- PropTypes (Recharts UMD dependency) -->
+  <script src="https://unpkg.com/prop-types/prop-types.min.js"></script>
+
+  <!-- Recharts UMD -->
+  <script src="https://unpkg.com/recharts@2.12.7/umd/Recharts.js"></script>
+
+  <!-- Babel for JSX in the browser (keeps parity with your current file) -->
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+
+  <!-- Firebase (Realtime DB) -->
+  <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-app.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-database.js"></script>
+
   <style>
-        body {
-            box-sizing: border-box;
-            margin: 0;
-            padding: 0;
-        }
-        
-        .fade-in {
-            animation: fadeIn 0.3s ease-in-out;
-        }
-        
-        @keyframes fadeIn {
-            from { opacity: 0; transform: translateY(10px); }
-            to { opacity: 1; transform: translateY(0); }
-        }
-        
-        .modal-overlay {
-            animation: modalFadeIn 0.2s ease-in-out;
-        }
-        
-        @keyframes modalFadeIn {
-            from { opacity: 0; }
-            to { opacity: 1; }
-        }
-        
-        .modal-content {
-            animation: modalSlideUp 0.3s ease-in-out;
-        }
-        
-        @keyframes modalSlideUp {
-            from { transform: translateY(20px); opacity: 0; }
-            to { transform: translateY(0); opacity: 1; }
-        }
-    </style>
-  <style>@view-transition { navigation: auto; }</style>
-  <script src="/_sdk/data_sdk.js" type="text/javascript"></script>
-  <script src="/_sdk/element_sdk.js" type="text/javascript"></script>
- </head>
- <body class="h-full">
-  <div id="root" class="h-full"></div>
+    body { font-family: Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial; background:#f3f4f6; }
+    .hide-scrollbar::-webkit-scrollbar { display:none; } .hide-scrollbar { -ms-overflow-style:none; scrollbar-width:none; }
+    .animate-fade-in { animation: fadeIn 0.25s ease-in-out; }
+    @keyframes fadeIn { from { opacity:0; transform: translateY(6px); } to { opacity:1; transform: translateY(0); } }
+  </style>
+</head>
+<body>
+  <div id="root"></div>
+
   <script type="text/babel">
-        const { useState, useEffect, useCallback } = React;
-        const { PieChart, Pie, BarChart, Bar, LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, Cell, ResponsiveContainer } = Recharts;
+  // ======= GLOBAL HELPERS & LIBS ========
+  const { useState, useEffect, useMemo } = React;
+  const RechartsObj = window.Recharts || window.Recharts.default || {};
+  const { PieChart, Pie, Cell, Tooltip, Legend, ResponsiveContainer, BarChart, Bar, XAxis, YAxis, CartesianGrid, LabelList } = RechartsObj;
 
-        // Grade Constants
-        const GRADES = ['A+', 'A', 'A-', 'B+', 'B', 'C+', 'C', 'D', 'E', 'G', 'TH'];
-        const GRADE_POINTS = {'A+':0, 'A':1, 'A-':2, 'B+':3, 'B':4, 'C+':5, 'C':6, 'D':7, 'E':8, 'G':9, 'TH':9};
-        const GRADE_CATEGORIES = {
-            'A+': 'cemerlang', 'A': 'cemerlang', 'A-': 'cemerlang',
-            'B+': 'kepujian', 'B': 'kepujian',
-            'C+': 'lulus', 'C': 'lulus', 'D': 'lulus',
-            'E': 'gagal', 'G': 'gagal',
-            'TH': 'th'
+  // Grades & points mapping (reused from your original)
+  const grades = ['A+','A','A-','B+','B','C+','C','D','E','G','TH'];
+  const POINTS = {'A+':0,'A':1,'A-':2,'B+':3,'B':4,'C+':5,'C':6,'D':7,'E':8,'G':9,'TH':9};
+
+  // ========== FIREBASE INIT ===========
+  // Use your config (you provided earlier) — kept inline for immediate use.
+  const firebaseConfig = {
+    apiKey: "AIzaSyDOMGkWG-7-Hmv4m3reUNr-AJA4hUTMPnY",
+    authDomain: "read-6034d.firebaseapp.com",
+    databaseURL: "https://read-6034d-default-rtdb.asia-southeast1.firebasedatabase.app",
+    projectId: "read-6034d",
+    storageBucket: "read-6034d.firebasestorage.app",
+    messagingSenderId: "282456310870",
+    appId: "1:282456310870:web:17d1d0488cf1a9d4bda7f7",
+    measurementId: "G-4SD732BSHW"
+  };
+
+  // Initialize (UMD firebase global objects)
+  if (!window.firebase || !window.firebase.apps) {
+    console.warn("Firebase library not found - Realtime sync will not work.");
+  }
+  try {
+    window.firebaseApp = firebase.initializeApp(firebaseConfig);
+    window.db = firebase.database();
+  } catch (e) {
+    console.warn("Firebase init error (may already be initialized):", e.message || e);
+    window.db = firebase.database();
+  }
+
+  // ======== GOOGLE SHEETS MULTI-SHEET LOADER =========
+  // Provided spreadsheet ID (from your edit link)
+  const SHEET_ID = "1GUW9dJE5AkaiAMRJhT4AIg6ikFKPNSWfnghgkW-V7oQ";
+
+  // Attempt to fetch CSV for each gid 0..24 and return valid CSVs
+  async function tryLoadAllSheets(spreadsheetId, maxGid=24) {
+    const base = `https://docs.google.com/spreadsheets/d/${spreadsheetId}/export?format=csv&gid=`;
+    const results = [];
+    for (let gid = 0; gid <= maxGid; gid++) {
+      try {
+        const url = base + gid;
+        const res = await fetch(url);
+        // Google returns 200 even for some invalid requests, check content-type or body heuristics:
+        if (!res.ok) continue;
+        const text = await res.text();
+        if (!text || text.trim().length < 10) continue;
+        // Heuristic: if content contains commas and newlines, treat as CSV:
+        if (text.indexOf(",") === -1) continue;
+        // Save
+        results.push({ gid, text });
+      } catch (e) {
+        // ignore any single-gid fetch errors and continue
+      }
+    }
+    return results; // array of {gid, text}
+  }
+
+  // CSV parser (handles quoted fields, CRLF)
+  function parseCSV(text) {
+    // Simple RFC4180-ish parser (handles quoted fields)
+    const rows = [];
+    let cur = '';
+    let row = [];
+    let inQuotes = false;
+    for (let i=0;i<text.length;i++) {
+      const ch = text[i];
+      if (ch === '"' ) {
+        // Peek next char for escaped quote
+        if (inQuotes && text[i+1] === '"') {
+          cur += '"';
+          i++;
+        } else {
+          inQuotes = !inQuotes;
+        }
+        continue;
+      }
+      if (!inQuotes && (ch === '\r' || ch === '\n')) {
+        if (cur !== '' || row.length > 0) {
+          row.push(cur);
+          rows.push(row);
+          row = [];
+          cur = '';
+        }
+        // skip possible \r\n pair
+        if (ch === '\r' && text[i+1] === '\n') i++;
+        continue;
+      }
+      if (!inQuotes && ch === ',') {
+        row.push(cur);
+        cur = '';
+        continue;
+      }
+      cur += ch;
+    }
+    // push last
+    if (cur !== '' || row.length > 0) {
+      row.push(cur);
+      rows.push(row);
+    }
+    // Trim whitespace from each cell
+    return rows.map(r => r.map(c => typeof c === 'string' ? c.trim() : c));
+  }
+
+  // Normalize header label to a key: "Name" -> "name", "No Kad Pengenalan" -> "nokad"
+  function normalizeHeader(h) {
+    if (!h) return '';
+    return h.toString().toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g,'');
+  }
+
+  // Heuristic: decide if a sheet is a candidate list (has name + grade OR mark)
+  function sheetLooksLikeCandidate(headersNorm) {
+    const hasName = headersNorm.some(h => /name|candidate|student|nama/.test(h));
+    const hasGradeOrMark = headersNorm.some(h => /grade|mark|score|marks|markah|gred/.test(h));
+    return hasName && hasGradeOrMark;
+  }
+
+  // Build students + summary from candidate-like sheet
+  function buildFromCandidateSheet(rows, headers) {
+    const headerNorm = headers.map(normalizeHeader);
+    const idx = (n) => headerNorm.indexOf(n);
+    // Identify common header keys by fuzzy match
+    const nameIdx = headerIndexLike(headerNorm, ['name','nama','student','candidate']);
+    const schoolIdx = headerIndexLike(headerNorm, ['school','sekolah','institution']);
+    const classIdx = headerIndexLike(headerNorm, ['class','kelas','form']);
+    const markIdx = headerIndexLike(headerNorm, ['mark','marks','score','markah']);
+    const gradeIdx = headerIndexLike(headerNorm, ['grade','gred']);
+
+    const students = [];
+    for (let i=0;i<rows.length;i++){
+      const r = rows[i];
+      // skip empty rows
+      if (r.every(c=>c===undefined||c==='')) continue;
+      const s = {
+        id: i+1,
+        name: nameIdx>=0 ? (r[nameIdx] || "").toString().trim() : `Row ${i+1}`,
+        school: schoolIdx>=0 ? (r[schoolIdx] || "").toString().trim() : 'Unknown',
+        className: classIdx>=0 ? (r[classIdx] || "").toString().trim() : 'Unknown',
+        mark: markIdx>=0 ? parseInt((r[markIdx]||'').toString().replace(/[^\d-]/g,'')) || 0 : null,
+        grade: gradeIdx>=0 ? (r[gradeIdx] || "").toString().trim().toUpperCase() : ''
+      };
+      students.push(s);
+    }
+
+    // Group by school|class
+    const grouped = {};
+    students.forEach(s => {
+      const key = `${s.school}|${s.className}`;
+      if(!grouped[key]) {
+        grouped[key] = {
+          schoolId: (s.school || 'UNKNOWN').replace(/\s+/g,'_').toUpperCase(),
+          schoolName: s.school || 'Unknown',
+          className: s.className || 'Unknown',
+          totalCandidates: 0,
+          grades: grades.reduce((a,g) => ({...a,[g]:0}), {})
         };
-        const CATEGORY_COLORS = {
-            cemerlang: '#10B981',
-            kepujian: '#3B82F6',
-            lulus: '#F59E0B',
-            gagal: '#EF4444',
-            th: '#9CA3AF'
-        };
+      }
+      grouped[key].totalCandidates++;
+      const g = (s.grade || 'TH').toUpperCase();
+      // some grades may be numeric - ignore
+      grouped[key].grades[g] = (grouped[key].grades[g]||0) + 1;
+    });
 
-        // Helper Functions
-        const calculateGP = (students) => {
-            if (!students || students.length === 0) return 0;
-            const totalPoints = students.reduce((sum, s) => sum + (GRADE_POINTS[s.grade] || 0), 0);
-            return (totalPoints / students.length).toFixed(2);
-        };
+    const summary = Object.values(grouped).map(g => {
+      // compute gp
+      let sum = 0, count = 0;
+      Object.entries(g.grades).forEach(([gr,qty]) => {
+        if (gr !== 'TH') {
+          sum += (POINTS[gr] || 9) * qty;
+          count += qty;
+        }
+      });
+      g.gp = count ? parseFloat((sum / count).toFixed(2)) : 9.00;
+      return g;
+    });
 
-        const getGradeDistribution = (students) => {
-            const dist = {};
-            GRADES.forEach(g => dist[g] = 0);
-            students.forEach(s => {
-                if (dist.hasOwnProperty(s.grade)) dist[s.grade]++;
-            });
-            return dist;
-        };
+    return { students, summary };
+  }
 
-        const getCategoryDistribution = (students) => {
-            const dist = { cemerlang: 0, kepujian: 0, lulus: 0, gagal: 0, th: 0 };
-            students.forEach(s => {
-                const cat = GRADE_CATEGORIES[s.grade];
-                if (cat) dist[cat]++;
-            });
-            return dist;
-        };
+  // helper: find index of header by approximate keys
+  function headerIndexLike(normHeaders, candidates) {
+    candidates = candidates.map(c=>c.toLowerCase());
+    for (let i=0;i<normHeaders.length;i++) {
+      for (let cand of candidates) {
+        if (normHeaders[i].indexOf(cand) !== -1) return i;
+      }
+    }
+    return -1;
+  }
 
-        const getPassRate = (students) => {
-            if (!students || students.length === 0) return 0;
-            const passed = students.filter(s => GRADE_POINTS[s.grade] <= 7).length;
-            return ((passed / students.length) * 100).toFixed(1);
-        };
+  // Load all sheets and build source object
+  async function loadAllSheetsAsSource() {
+    const sheetTexts = await tryLoadAllSheets(SHEET_ID, 24);
+    // If none found, fall back to published single CSV link (provided earlier)
+    if (sheetTexts.length === 0) {
+      // try published CSV URL (original single-sheet pub link if present)
+      try {
+        const fallbackUrl = `https://docs.google.com/spreadsheets/d/${SHEET_ID}/pub?output=csv`;
+        const r = await fetch(fallbackUrl);
+        if (r.ok) {
+          const t = await r.text();
+          if (t && t.indexOf(",") !== -1) sheetTexts.push({ gid: 'pub', text: t });
+        }
+      } catch (e) {}
+    }
 
-        // Sidebar Component
-        const Sidebar = ({ activeTab, setActiveTab }) => {
-            const navItems = [
-                { id: 'dashboard', icon: '📊', label: 'Dashboard' },
-                { id: 'analysis', icon: '📈', label: 'Analysis' },
-                { id: 'data', icon: '📁', label: 'Data Sources' },
-                { id: 'interventions', icon: '🔧', label: 'Interventions' },
-                { id: 'swot', icon: '🎯', label: 'SWOT' },
-                { id: 'settings', icon: '⚙️', label: 'Settings' }
-            ];
+    const sheetObjects = [];
+    for (const s of sheetTexts) {
+      const rows = parseCSV(s.text);
+      // If first row is blank, drop it
+      let headerRow = rows[0] || [];
+      // Clean header: remove leading empty or numbers
+      // Try to detect sheet name from the CSV text if available (Google sometimes includes title)
+      let inferredName = `gid_${s.gid}`;
 
-            return (
-                <aside className="w-64 bg-gradient-to-b from-slate-900 to-slate-800 text-white flex flex-col border-r border-slate-700">
-                    <div className="p-6 border-b border-slate-700">
-                        <h1 className="text-2xl font-bold mb-1">R.E.A.D Dashboard</h1>
-                        <p className="text-xs text-slate-400">School Analytics Platform</p>
+      // Heuristic: if first cell of first row looks like sheet title (non-empty and there is no comma in that row), use it.
+      if (headerRow.length === 1 && headerRow[0] && headerRow[0].length > 2 && headerRow[0].indexOf(',') === -1) {
+        inferredName = headerRow[0].slice(0,40);
+        // promote next row to header if present
+        if (rows[1]) {
+          headerRow = rows[1];
+          rows.splice(0,1); // remove first
+        }
+      }
+
+      // If headerRow contains numbers only or empty, try to scan forward for row with alpha column names
+      const alphaHeaderIdx = rows.findIndex(r => r.some(c => /[A-Za-z\u00C0-\u017F]/.test((c||'').toString())));
+      if (alphaHeaderIdx > 0) {
+        headerRow = rows[alphaHeaderIdx];
+        // data rows after header
+        rows.splice(0, alphaHeaderIdx+1);
+      } else {
+        // normal case: remove header row from rows for data rows
+        rows.splice(0,1);
+      }
+
+      const headers = headerRow.map(h => h ? h.toString().trim() : '');
+      // Decide whether candidate sheet
+      const headersNorm = headers.map(normalizeHeader);
+      const looksCandidate = sheetLooksLikeCandidate(headersNorm);
+
+      let processed = null;
+      if (looksCandidate) {
+        processed = buildFromCandidateSheet(rows, headers);
+      } else {
+        // store as raw sheet rows
+        processed = { students: [], summary: [], rawRows: rows, headers };
+      }
+
+      sheetObjects.push({
+        gid: s.gid,
+        name: inferredName,
+        headers,
+        processed,
+        rawText: s.text
+      });
+    }
+
+    // Combine students/summary from all candidate-like sheets
+    const combinedStudents = [];
+    const combinedSummary = [];
+    sheetObjects.forEach(sh => {
+      if (sh.processed.students && sh.processed.students.length) combinedStudents.push(...sh.processed.students);
+      if (sh.processed.summary && sh.processed.summary.length) combinedSummary.push(...sh.processed.summary);
+    });
+
+    // if no combined summary, create placeholder using raw sheets list
+    const sourceObj = {
+      id: 1,
+      name: "PPSA Multi-Sheet (Live)",
+      previousGP: null,
+      rawSheets: sheetObjects,
+      students: combinedStudents,
+      summary: combinedSummary.length ? combinedSummary : sheetObjects.flatMap(s=>s.processed.summary || [])
+    };
+
+    return sourceObj;
+  }
+
+  // =========== SIMPLE UI COMPONENTS (KPIs & Small Cards) ===========
+  const KpiCard = ({ title, value, subtext }) => (
+    <div className="bg-white p-4 rounded-xl shadow-sm border border-gray-100">
+      <div className="flex justify-between items-start">
+        <div>
+          <p className="text-xs font-semibold uppercase text-gray-500">{title}</p>
+          <h3 className="text-2xl font-bold text-gray-800 mt-1">{value}</h3>
+        </div>
+      </div>
+      {subtext && <p className="text-xs text-gray-500 mt-2">{subtext}</p>}
+    </div>
+  );
+
+  // Group card
+  const GroupCard = ({ title, subtitle, count, total, color }) => (
+    <div className={`p-4 rounded-xl border ${color || 'border-gray-100 bg-white'}`}>
+      <p className="text-xs text-gray-500">{title}</p>
+      <h3 className="text-xl font-bold mt-2">{count}</h3>
+      {total != null && <p className="text-xs text-gray-400 mt-1">{((count/Math.max(total,1))*100).toFixed(1)}%</p>}
+      <p className="text-xs text-gray-400 mt-2">{subtitle}</p>
+    </div>
+  );
+
+  // ======= MAIN APP ========
+  function App() {
+    const [loading, setLoading] = useState(true);
+    const [source, setSource] = useState(null);
+    const [user, setUser] = useState(null);
+    const [masterSwotData, setMasterSwotData] = useState({});
+    const [masterInterventionData, setMasterInterventionData] = useState({});
+    const [globalKpiTarget, setGlobalKpiTarget] = useState(4.5);
+
+    // Load sheets once
+    useEffect(() => {
+      let cancelled = false;
+      (async () => {
+        setLoading(true);
+        const src = await loadAllSheetsAsSource();
+        if (!cancelled) {
+          setSource(src);
+        }
+        setLoading(false);
+      })();
+      return () => cancelled = true;
+    }, []);
+
+    // Realtime DB listeners for shared data (swot & interventions)
+    useEffect(() => {
+      if (!window.db) return;
+      const swotRef = window.db.ref('MASTER_SWOT_DATA');
+      swotRef.on('value', snap => {
+        const val = snap.val() || {};
+        setMasterSwotData(val);
+      });
+      const interRef = window.db.ref('MASTER_INTERVENTION_DATA');
+      interRef.on('value', snap => {
+        const val = snap.val() || {};
+        setMasterInterventionData(val);
+      });
+
+      const kpiRef = window.db.ref('globalKpiTarget');
+      kpiRef.on('value', snap => {
+        const v = snap.val();
+        if (v !== null && v !== undefined) setGlobalKpiTarget(parseFloat(v));
+      });
+
+      return () => {
+        swotRef.off();
+        interRef.off();
+        kpiRef.off();
+      };
+    }, []);
+
+    // Simple auth: localStorage users (same pattern you had)
+    useEffect(() => {
+      const saved = localStorage.getItem('currentUser');
+      if (saved) {
+        try { setUser(JSON.parse(saved)); } catch(e){ localStorage.removeItem('currentUser'); }
+      }
+    }, []);
+
+    const handleLoginMock = (userInfo) => {
+      setUser(userInfo);
+      localStorage.setItem('currentUser', JSON.stringify(userInfo));
+    };
+    const handleLogout = () => {
+      setUser(null);
+      localStorage.removeItem('currentUser');
+    };
+
+    // Save swot to DB (keyed by userId or by school)
+    const saveSwotToDB = async (userId, schoolId, plan) => {
+      try {
+        const path = `MASTER_SWOT_DATA/${userId}/${schoolId}`;
+        await window.db.ref(path).set(plan);
+        // local update is handled by listener
+      } catch (e) {
+        console.error("Failed to save SWOT to DB", e);
+      }
+    };
+
+    // Save intervention to DB
+    const saveInterventionToDB = async (userId, schoolId, plan) => {
+      try {
+        const path = `MASTER_INTERVENTION_DATA/${userId}/${schoolId}`;
+        await window.db.ref(path).set(plan);
+      } catch (e) {
+        console.error("Failed to save intervention", e);
+      }
+    };
+
+    // UI: if not logged in show auth wrapper
+    if (!user) {
+      return <AuthWrapper onLogin={handleLoginMock} />;
+    }
+
+    if (loading || !source) {
+      return (
+        <div className="min-h-screen flex items-center justify-center">
+          <div className="text-center">
+            <div className="loader mb-4"></div>
+            <p className="text-gray-600">Loading PPSA sheets and building dashboard... Please wait.</p>
+          </div>
+        </div>
+      );
+    }
+
+    // Derived KPIs
+    const totalCandidates = source.summary.reduce((acc, r) => acc + (r.totalCandidates||0), 0);
+    const weightedSum = source.summary.reduce((acc, r) => acc + ((r.gp || 9) * (r.totalCandidates || 0)), 0);
+    const gp = totalCandidates ? (weightedSum / totalCandidates).toFixed(2) : 'N/A';
+
+    // grade groups totals
+    const gradeCounts = grades.reduce((acc,g)=>{ acc[g]=0; return acc; }, {});
+    source.summary.forEach(s => {
+      Object.entries(s.grades || {}).forEach(([g,q]) => { gradeCounts[g] = (gradeCounts[g] || 0) + (q||0); });
+    });
+    const groups = {
+      cemerlang: (gradeCounts['A+']||0) + (gradeCounts['A']||0) + (gradeCounts['A-']||0),
+      kepujian: (gradeCounts['B+']||0)+(gradeCounts['B']||0)+(gradeCounts['C+']||0)+(gradeCounts['C']||0),
+      lulus: (gradeCounts['D']||0)+(gradeCounts['E']||0),
+      gagal: (gradeCounts['G']||0),
+      th: (gradeCounts['TH']||0)
+    };
+
+    // Render main dashboard
+    return (
+      <div className="flex h-screen">
+        <aside className="w-64 bg-slate-900 text-white p-6 flex flex-col">
+          <h2 className="font-bold text-lg">R.E.A.D. Dashboard</h2>
+          <p className="text-xs text-slate-300 mt-1">PPSA multi-sheet import</p>
+          <div className="mt-4">
+            <p className="text-xs text-slate-400">Signed in as</p>
+            <p className="font-semibold mt-1">{user.name} <span className="text-xs text-slate-300">({user.role || 'viewer'})</span></p>
+          </div>
+          <div className="mt-auto">
+            <button onClick={handleLogout} className="w-full bg-red-600 py-2 rounded-md">Sign out</button>
+          </div>
+        </aside>
+
+        <main className="flex-1 p-8 overflow-auto">
+          <header className="flex justify-between items-start mb-6">
+            <div>
+              <h1 className="text-2xl font-bold">Data Overview</h1>
+              <p className="text-sm text-gray-600">Active Source: <span className="font-semibold">{source.name}</span></p>
+            </div>
+            <div className="flex gap-4">
+              <KpiCard title="Grade Purata (GP)" value={gp} subtext={`Total candidates: ${totalCandidates}`} />
+            </div>
+          </header>
+
+          <section className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
+            <GroupCard title="Cemerlang (A+/A/A-)" subtitle="Top band" count={groups.cemerlang} total={totalCandidates} color="border-emerald-200 bg-emerald-50" />
+            <GroupCard title="Kepujian (B+/B/C+/C)" subtitle="Credit band" count={groups.kepujian} total={totalCandidates} color="border-blue-200 bg-blue-50" />
+            <GroupCard title="Lulus (D/E)" subtitle="Pass band" count={groups.lulus} total={totalCandidates} color="border-yellow-200 bg-yellow-50" />
+          </section>
+
+          <section className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-6">
+            <div className="bg-white p-6 rounded-xl shadow-sm">
+              <h3 className="font-semibold mb-4">Grade Group Distribution</h3>
+              <div style={{ height: 260 }}>
+                <ResponsiveContainer width="100%" height="100%">
+                  <PieChart>
+                    <Pie data={[
+                      { name: 'Cemerlang', value: groups.cemerlang },
+                      { name: 'Kepujian', value: groups.kepujian },
+                      { name: 'Lulus', value: groups.lulus },
+                      { name: 'Gagal', value: groups.gagal }
+                    ]} dataKey="value" nameKey="name" cx="50%" cy="50%" outerRadius={80} label>
+                      <Cell fill="#10B981" />
+                      <Cell fill="#3B82F6" />
+                      <Cell fill="#F59E0B" />
+                      <Cell fill="#EF4444" />
+                    </Pie>
+                    <Tooltip />
+                    <Legend />
+                  </PieChart>
+                </ResponsiveContainer>
+              </div>
+            </div>
+
+            <div className="bg-white p-6 rounded-xl shadow-sm">
+              <h3 className="font-semibold mb-4">Sheets imported</h3>
+              <ul className="space-y-2 text-sm">
+                {source.rawSheets.map(s => (
+                  <li key={s.gid} className="p-2 rounded border border-gray-100">
+                    <div className="flex justify-between">
+                      <div>
+                        <div className="font-semibold">{s.name || `Sheet gid ${s.gid}`}</div>
+                        <div className="text-xs text-gray-500">gid: {s.gid} — headers: {s.headers.map((h,i)=>h?h:'-').slice(0,6).join(', ')}</div>
+                      </div>
+                      <div className="text-xs text-gray-400">{s.processed && s.processed.students && s.processed.students.length ? `${s.processed.students.length} students` : (s.processed.rawRows ? `${s.processed.rawRows.length} rows` : '')}</div>
                     </div>
-                    <nav className="flex-1 p-4 space-y-2">
-                        {navItems.map(item => (
-                            <button
-                                key={item.id}
-                                onClick={() => setActiveTab(item.id)}
-                                className={`w-full flex items-center space-x-3 px-4 py-3 rounded-lg transition-all ${
-                                    activeTab === item.id
-                                        ? 'bg-blue-600 text-white shadow-lg'
-                                        : 'text-slate-300 hover:bg-slate-700'
-                                }`}
-                            >
-                                <span className="text-xl">{item.icon}</span>
-                                <span className="font-medium">{item.label}</span>
-                            </button>
-                        ))}
-                    </nav>
-                </aside>
-            );
-        };
+                  </li>
+                ))}
+              </ul>
+            </div>
+          </section>
 
-        // Modal Component
-        const Modal = ({ isOpen, onClose, title, children }) => {
-            if (!isOpen) return null;
+          <section className="bg-white p-6 rounded-xl shadow-sm">
+            <h3 className="font-semibold mb-3">School GP Comparison (Aggregate)</h3>
+            <div className="overflow-x-auto">
+              <table className="min-w-full text-sm">
+                <thead className="text-xs text-gray-500">
+                  <tr>
+                    <th className="px-3 py-2 text-left">School</th>
+                    <th className="px-3 py-2 text-right">GP</th>
+                    <th className="px-3 py-2 text-right">Total Candidates</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {source.summary.sort((a,b)=> (a.gp||9) - (b.gp||9)).map((r, idx) => (
+                    <tr key={idx} className="border-t">
+                      <td className="px-3 py-2">{r.schoolName}</td>
+                      <td className="px-3 py-2 text-right">{r.gp}</td>
+                      <td className="px-3 py-2 text-right">{r.totalCandidates}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </section>
 
-            return (
-                <div className="modal-overlay fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4" onClick={onClose}>
-                    <div className="modal-content bg-white rounded-xl shadow-2xl max-w-2xl w-full max-h-[90vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
-                        <div className="sticky top-0 bg-white border-b border-gray-200 px-6 py-4 flex justify-between items-center">
-                            <h2 className="text-2xl font-bold text-gray-900">{title}</h2>
-                            <button onClick={onClose} className="text-gray-400 hover:text-gray-600 text-2xl">×</button>
-                        </div>
-                        <div className="p-6">
-                            {children}
-                        </div>
-                    </div>
-                </div>
-            );
-        };
+        </main>
+      </div>
+    );
+  }
 
-        // Add Source Modal
-        const AddSourceModal = ({ isOpen, onClose, onSourceAdded }) => {
-            const [sourceName, setSourceName] = useState('');
-            const [file, setFile] = useState(null);
-            const [loading, setLoading] = useState(false);
-            const [error, setError] = useState('');
+  // ======= AUTH WRAPPER (simple register/login for demo) =======
+  function AuthWrapper({ onLogin }) {
+    const [mode, setMode] = useState('login');
+    const [name, setName] = useState('');
+    const [username, setUsername] = useState('');
+    const [password, setPassword] = useState('');
+    const handleRegister = (e) => {
+      e.preventDefault();
+      const users = JSON.parse(localStorage.getItem('MOCK_USERS') || '[]');
+      const newUser = { id: users.length ? Math.max(...users.map(u=>u.id))+1:1, name: name || username || 'User', username, password, role: users.length ? 'viewer' : 'admin' };
+      users.push(newUser);
+      localStorage.setItem('MOCK_USERS', JSON.stringify(users));
+      onLogin(newUser);
+    };
+    const handleLogin = (e) => {
+      e.preventDefault();
+      const users = JSON.parse(localStorage.getItem('MOCK_USERS') || '[]');
+      const user = users.find(u => u.username === username && u.password === password);
+      if (user) onLogin(user);
+      else alert('Invalid credentials. If first time, register instead.');
+    };
 
-            const handleFileChange = (e) => {
-                setFile(e.target.files[0]);
-                setError('');
-            };
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-gray-100 p-6">
+        <div className="bg-white p-8 rounded-xl shadow-lg w-full max-w-md">
+          <h2 className="text-xl font-bold mb-4">R.E.A.D. Dashboard</h2>
+          {mode==='login' ? (
+            <form onSubmit={handleLogin} className="space-y-3">
+              <div>
+                <label className="text-sm">Username</label>
+                <input className="w-full border p-2 rounded mt-1" value={username} onChange={e=>setUsername(e.target.value)} />
+              </div>
+              <div>
+                <label className="text-sm">Password</label>
+                <input type="password" className="w-full border p-2 rounded mt-1" value={password} onChange={e=>setPassword(e.target.value)} />
+              </div>
+              <button type="submit" className="w-full bg-blue-600 text-white py-2 rounded">Sign In</button>
+              <div className="text-center mt-2 text-xs">
+                <button type="button" onClick={()=>setMode('register')} className="text-green-600">Register account</button>
+              </div>
+            </form>
+          ) : (
+            <form onSubmit={handleRegister} className="space-y-3">
+              <div>
+                <label className="text-sm">Full name</label>
+                <input className="w-full border p-2 rounded mt-1" value={name} onChange={e=>setName(e.target.value)} />
+              </div>
+              <div>
+                <label className="text-sm">Username</label>
+                <input className="w-full border p-2 rounded mt-1" value={username} onChange={e=>setUsername(e.target.value)} />
+              </div>
+              <div>
+                <label className="text-sm">Password</label>
+                <input type="password" className="w-full border p-2 rounded mt-1" value={password} onChange={e=>setPassword(e.target.value)} />
+              </div>
+              <button type="submit" className="w-full bg-green-600 text-white py-2 rounded">Register & Sign In</button>
+              <div className="text-center mt-2 text-xs">
+                <button type="button" onClick={()=>setMode('login')} className="text-blue-600">Already have an account? Sign in</button>
+              </div>
+            </form>
+          )}
+        </div>
+      </div>
+    );
+  }
 
-            const processFile = async () => {
-                if (!file || !sourceName.trim()) {
-                    setError('Please provide a source name and select a file');
-                    return;
-                }
+  // ==== Render App ====
+  ReactDOM.createRoot(document.getElementById('root')).render(<App />);
 
-                setLoading(true);
-                setError('');
-
-                try {
-                    const reader = new FileReader();
-                    reader.onload = async (e) => {
-                        try {
-                            const data = new Uint8Array(e.target.result);
-                            const workbook = XLSX.read(data, { type: 'array' });
-                            const firstSheet = workbook.Sheets[workbook.SheetNames[0]];
-                            const jsonData = XLSX.utils.sheet_to_json(firstSheet);
-
-                            // Map columns
-                            const students = jsonData.map((row, idx) => ({
-                                id: `student_${Date.now()}_${idx}`,
-                                name: row.Name || row.name || row.NAMA || row.nama || `Student ${idx + 1}`,
-                                grade: row.Grade || row.grade || row.GRED || row.gred || 'D',
-                                mark: parseFloat(row.Mark || row.mark || row.MARKAH || row.markah || 0),
-                                class: row.Class || row.class || row.KELAS || row.kelas || 'N/A',
-                                school: row.School || row.school || row.SEKOLAH || row.sekolah || 'N/A'
-                            }));
-
-                            // Calculate summary
-                            const gp = calculateGP(students);
-                            const gradeDistribution = getGradeDistribution(students);
-                            const categoryDistribution = getCategoryDistribution(students);
-                            const passRate = getPassRate(students);
-
-                            const summary = {
-                                totalStudents: students.length,
-                                gp: parseFloat(gp),
-                                passRate: parseFloat(passRate),
-                                gradeDistribution,
-                                categoryDistribution
-                            };
-
-                            // Save to Firestore
-                            const { addDoc, collection } = window.firebaseModules;
-                            const docRef = await addDoc(collection(window.firebaseDb, 'sources'), {
-                                name: sourceName.trim(),
-                                summary,
-                                students,
-                                createdAt: new Date().toISOString(),
-                                userId: window.firebaseAuth.currentUser?.uid || 'anonymous'
-                            });
-
-                            onSourceAdded();
-                            onClose();
-                            setSourceName('');
-                            setFile(null);
-                        } catch (err) {
-                            setError('Error processing file: ' + err.message);
-                        } finally {
-                            setLoading(false);
-                        }
-                    };
-                    reader.readAsArrayBuffer(file);
-                } catch (err) {
-                    setError('Error reading file: ' + err.message);
-                    setLoading(false);
-                }
-            };
-
-            return (
-                <Modal isOpen={isOpen} onClose={onClose} title="Add New Data Source">
-                    <div className="space-y-4">
-                        <div>
-                            <label className="block text-sm font-medium text-gray-700 mb-2">Source Name</label>
-                            <input
-                                type="text"
-                                value={sourceName}
-                                onChange={(e) => setSourceName(e.target.value)}
-                                placeholder="e.g., SPM 2024"
-                                className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                            />
-                        </div>
-                        <div>
-                            <label className="block text-sm font-medium text-gray-700 mb-2">Upload Excel/CSV File</label>
-                            <input
-                                type="file"
-                                accept=".xlsx,.xls,.csv"
-                                onChange={handleFileChange}
-                                className="w-full px-4 py-2 border border-gray-300 rounded-lg"
-                            />
-                            <p className="text-xs text-gray-500 mt-2">Expected columns: Name, Grade, Mark, Class, School</p>
-                        </div>
-                        {error && (
-                            <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-lg">
-                                {error}
-                            </div>
-                        )}
-                        <div className="flex justify-end space-x-3 pt-4">
-                            <button
-                                onClick={onClose}
-                                className="px-6 py-2 border border-gray-300 rounded-lg hover:bg-gray-50"
-                                disabled={loading}
-                            >
-                                Cancel
-                            </button>
-                            <button
-                                onClick={processFile}
-                                disabled={loading}
-                                className="px-6 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50"
-                            >
-                                {loading ? 'Processing...' : 'Add Source'}
-                            </button>
-                        </div>
-                    </div>
-                </Modal>
-            );
-        };
-
-        // Dashboard Tab
-        const DashboardTab = ({ sources }) => {
-            const latestSource = sources.length > 0 ? sources[0] : null;
-            const summary = latestSource?.summary || {
-                totalStudents: 0,
-                gp: 0,
-                passRate: 0,
-                categoryDistribution: {}
-            };
-
-            const pieData = Object.entries(summary.categoryDistribution || {}).map(([name, value]) => ({
-                name: name.charAt(0).toUpperCase() + name.slice(1),
-                value,
-                color: CATEGORY_COLORS[name]
-            }));
-
-            const barData = Object.entries(summary.gradeDistribution || {}).map(([grade, count]) => ({
-                grade,
-                count,
-                fill: CATEGORY_COLORS[GRADE_CATEGORIES[grade]] || '#9CA3AF'
-            }));
-
-            return (
-                <div className="space-y-6 fade-in">
-                    {/* KPI Cards */}
-                    <div className="grid grid-cols-3 gap-6">
-                        <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-6 border-l-4 border-l-blue-500">
-                            <div className="flex justify-between items-start mb-4">
-                                <span className="text-sm font-medium text-gray-600">Grade Purata (GP)</span>
-                                <span className="text-2xl">📚</span>
-                            </div>
-                            <div className="text-4xl font-bold text-gray-900 mb-2">{summary.gp.toFixed(2)}</div>
-                            <div className="text-sm text-green-600">Latest exam data</div>
-                        </div>
-                        <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-6 border-l-4 border-l-green-500">
-                            <div className="flex justify-between items-start mb-4">
-                                <span className="text-sm font-medium text-gray-600">Total Candidates</span>
-                                <span className="text-2xl">👥</span>
-                            </div>
-                            <div className="text-4xl font-bold text-gray-900 mb-2">{summary.totalStudents}</div>
-                            <div className="text-sm text-gray-500">Students analyzed</div>
-                        </div>
-                        <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-6 border-l-4 border-l-orange-500">
-                            <div className="flex justify-between items-start mb-4">
-                                <span className="text-sm font-medium text-gray-600">Pass Rate</span>
-                                <span className="text-2xl">✅</span>
-                            </div>
-                            <div className="text-4xl font-bold text-gray-900 mb-2">{summary.passRate}%</div>
-                            <div className="text-sm text-gray-500">Overall performance</div>
-                        </div>
-                    </div>
-
-                    {/* Performance Cards */}
-                    <div className="grid grid-cols-4 gap-6">
-                        {Object.entries(summary.categoryDistribution || {}).map(([category, count]) => {
-                            const percentage = summary.totalStudents > 0 ? ((count / summary.totalStudents) * 100).toFixed(1) : 0;
-                            return (
-                                <div key={category} className="bg-white rounded-xl shadow-sm border border-gray-200 p-6 text-center border-t-4" style={{ borderTopColor: CATEGORY_COLORS[category] }}>
-                                    <div className="text-lg font-semibold mb-3" style={{ color: CATEGORY_COLORS[category] }}>
-                                        {category.charAt(0).toUpperCase() + category.slice(1)}
-                                    </div>
-                                    <div className="text-3xl font-bold text-gray-900 mb-2">{percentage}%</div>
-                                    <div className="text-sm text-gray-500">{count} students</div>
-                                </div>
-                            );
-                        })}
-                    </div>
-
-                    {/* Charts */}
-                    <div className="grid grid-cols-2 gap-6">
-                        <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-6">
-                            <h3 className="text-lg font-bold text-gray-900 mb-4">Grade Group Distribution</h3>
-                            <ResponsiveContainer width="100%" height={300}>
-                                <PieChart>
-                                    <Pie data={pieData} dataKey="value" nameKey="name" cx="50%" cy="50%" outerRadius={100} label>
-                                        {pieData.map((entry, index) => (
-                                            <Cell key={`cell-${index}`} fill={entry.color} />
-                                        ))}
-                                    </Pie>
-                                    <Tooltip />
-                                    <Legend />
-                                </PieChart>
-                            </ResponsiveContainer>
-                        </div>
-                        <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-6">
-                            <h3 className="text-lg font-bold text-gray-900 mb-4">Grade Count Breakdown</h3>
-                            <ResponsiveContainer width="100%" height={300}>
-                                <BarChart data={barData}>
-                                    <CartesianGrid strokeDasharray="3 3" />
-                                    <XAxis dataKey="grade" />
-                                    <YAxis />
-                                    <Tooltip />
-                                    <Bar dataKey="count" />
-                                </BarChart>
-                            </ResponsiveContainer>
-                        </div>
-                    </div>
-                </div>
-            );
-        };
-
-        // Data Sources Tab
-        const DataTab = ({ sources, onRefresh }) => {
-            const [showAddModal, setShowAddModal] = useState(false);
-
-            return (
-                <div className="space-y-6 fade-in">
-                    <div className="flex justify-between items-center">
-                        <h2 className="text-2xl font-bold text-gray-900">Data Sources</h2>
-                        <button
-                            onClick={() => setShowAddModal(true)}
-                            className="px-6 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 flex items-center space-x-2"
-                        >
-                            <span>➕</span>
-                            <span>Add Source</span>
-                        </button>
-                    </div>
-
-                    {sources.length === 0 ? (
-                        <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-12 text-center">
-                            <div className="text-6xl mb-4">📁</div>
-                            <h3 className="text-xl font-bold text-gray-900 mb-2">No Data Sources Yet</h3>
-                            <p className="text-gray-600 mb-6">Upload your first exam data to get started</p>
-                            <button
-                                onClick={() => setShowAddModal(true)}
-                                className="px-6 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700"
-                            >
-                                Add Your First Source
-                            </button>
-                        </div>
-                    ) : (
-                        <div className="grid gap-6">
-                            {sources.map(source => (
-                                <div key={source.id} className="bg-white rounded-xl shadow-sm border border-gray-200 p-6">
-                                    <div className="flex justify-between items-start mb-4">
-                                        <div>
-                                            <h3 className="text-xl font-bold text-gray-900">{source.name}</h3>
-                                            <p className="text-sm text-gray-500">Added {new Date(source.createdAt).toLocaleDateString()}</p>
-                                        </div>
-                                        <div className="flex space-x-2">
-                                            <button className="px-4 py-2 text-sm border border-gray-300 rounded-lg hover:bg-gray-50">
-                                                Rename
-                                            </button>
-                                            <button className="px-4 py-2 text-sm text-red-600 border border-red-300 rounded-lg hover:bg-red-50">
-                                                Delete
-                                            </button>
-                                        </div>
-                                    </div>
-                                    <div className="grid grid-cols-4 gap-4">
-                                        <div className="bg-gray-50 rounded-lg p-4">
-                                            <div className="text-sm text-gray-600 mb-1">Students</div>
-                                            <div className="text-2xl font-bold text-gray-900">{source.summary.totalStudents}</div>
-                                        </div>
-                                        <div className="bg-gray-50 rounded-lg p-4">
-                                            <div className="text-sm text-gray-600 mb-1">GP</div>
-                                            <div className="text-2xl font-bold text-gray-900">{source.summary.gp.toFixed(2)}</div>
-                                        </div>
-                                        <div className="bg-gray-50 rounded-lg p-4">
-                                            <div className="text-sm text-gray-600 mb-1">Pass Rate</div>
-                                            <div className="text-2xl font-bold text-gray-900">{source.summary.passRate}%</div>
-                                        </div>
-                                        <div className="bg-gray-50 rounded-lg p-4">
-                                            <div className="text-sm text-gray-600 mb-1">Top Grade</div>
-                                            <div className="text-2xl font-bold text-gray-900">
-                                                {Object.entries(source.summary.categoryDistribution).sort((a,b) => b[1] - a[1])[0]?.[0] || 'N/A'}
-                                            </div>
-                                        </div>
-                                    </div>
-                                </div>
-                            ))}
-                        </div>
-                    )}
-
-                    <AddSourceModal 
-                        isOpen={showAddModal} 
-                        onClose={() => setShowAddModal(false)}
-                        onSourceAdded={onRefresh}
-                    />
-                </div>
-            );
-        };
-
-        // Analysis Tab
-        const AnalysisTab = ({ sources }) => {
-            const [selectedSource, setSelectedSource] = useState('');
-            const [selectedSchool, setSelectedSchool] = useState('all');
-            const [selectedClass, setSelectedClass] = useState('all');
-
-            const currentSource = sources.find(s => s.id === selectedSource);
-            const students = currentSource?.students || [];
-
-            // Filter students
-            const filteredStudents = students.filter(s => {
-                if (selectedSchool !== 'all' && s.school !== selectedSchool) return false;
-                if (selectedClass !== 'all' && s.class !== selectedClass) return false;
-                return true;
-            });
-
-            const schools = [...new Set(students.map(s => s.school))];
-            const classes = [...new Set(students.map(s => s.class))];
-
-            const exportToExcel = () => {
-                const ws = XLSX.utils.json_to_sheet(filteredStudents);
-                const wb = XLSX.utils.book_new();
-                XLSX.utils.book_append_sheet(wb, ws, "Students");
-                XLSX.writeFile(wb, "analysis_export.xlsx");
-            };
-
-            return (
-                <div className="space-y-6 fade-in">
-                    {/* Filters */}
-                    <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-6">
-                        <div className="grid grid-cols-3 gap-4">
-                            <div>
-                                <label className="block text-sm font-medium text-gray-700 mb-2">Select Source</label>
-                                <select 
-                                    value={selectedSource}
-                                    onChange={(e) => setSelectedSource(e.target.value)}
-                                    className="w-full px-4 py-2 border border-gray-300 rounded-lg"
-                                >
-                                    <option value="">Choose a source...</option>
-                                    {sources.map(s => (
-                                        <option key={s.id} value={s.id}>{s.name}</option>
-                                    ))}
-                                </select>
-                            </div>
-                            <div>
-                                <label className="block text-sm font-medium text-gray-700 mb-2">Select School</label>
-                                <select 
-                                    value={selectedSchool}
-                                    onChange={(e) => setSelectedSchool(e.target.value)}
-                                    className="w-full px-4 py-2 border border-gray-300 rounded-lg"
-                                >
-                                    <option value="all">All Schools</option>
-                                    {schools.map(s => (
-                                        <option key={s} value={s}>{s}</option>
-                                    ))}
-                                </select>
-                            </div>
-                            <div>
-                                <label className="block text-sm font-medium text-gray-700 mb-2">Select Class</label>
-                                <select 
-                                    value={selectedClass}
-                                    onChange={(e) => setSelectedClass(e.target.value)}
-                                    className="w-full px-4 py-2 border border-gray-300 rounded-lg"
-                                >
-                                    <option value="all">All Classes</option>
-                                    {classes.map(c => (
-                                        <option key={c} value={c}>{c}</option>
-                                    ))}
-                                </select>
-                            </div>
-                        </div>
-                    </div>
-
-                    {filteredStudents.length > 0 && (
-                        <>
-                            <div className="flex justify-between items-center">
-                                <h3 className="text-xl font-bold text-gray-900">
-                                    Students ({filteredStudents.length})
-                                </h3>
-                                <button
-                                    onClick={exportToExcel}
-                                    className="px-6 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 flex items-center space-x-2"
-                                >
-                                    <span>📥</span>
-                                    <span>Export to Excel</span>
-                                </button>
-                            </div>
-
-                            {/* Student List by Category */}
-                            {Object.entries(GRADE_CATEGORIES).reduce((acc, [grade, category]) => {
-                                if (!acc[category]) acc[category] = [];
-                                const studentsInGrade = filteredStudents.filter(s => s.grade === grade);
-                                acc[category].push(...studentsInGrade);
-                                return acc;
-                            }, {}).constructor === Object && Object.entries(
-                                Object.entries(GRADE_CATEGORIES).reduce((acc, [grade, category]) => {
-                                    if (!acc[category]) acc[category] = [];
-                                    const studentsInGrade = filteredStudents.filter(s => s.grade === grade);
-                                    acc[category].push(...studentsInGrade);
-                                    return acc;
-                                }, {})
-                            ).map(([category, categoryStudents]) => (
-                                categoryStudents.length > 0 && (
-                                    <div key={category} className="bg-white rounded-xl shadow-sm border border-gray-200 p-6">
-                                        <h4 className="text-lg font-bold mb-4" style={{ color: CATEGORY_COLORS[category] }}>
-                                            {category.charAt(0).toUpperCase() + category.slice(1)} ({categoryStudents.length})
-                                        </h4>
-                                        <div className="overflow-x-auto">
-                                            <table className="w-full">
-                                                <thead className="bg-gray-50">
-                                                    <tr>
-                                                        <th className="px-4 py-3 text-left text-sm font-medium text-gray-600">Name</th>
-                                                        <th className="px-4 py-3 text-left text-sm font-medium text-gray-600">Grade</th>
-                                                        <th className="px-4 py-3 text-left text-sm font-medium text-gray-600">Mark</th>
-                                                        <th className="px-4 py-3 text-left text-sm font-medium text-gray-600">Class</th>
-                                                        <th className="px-4 py-3 text-left text-sm font-medium text-gray-600">School</th>
-                                                    </tr>
-                                                </thead>
-                                                <tbody>
-                                                    {categoryStudents.map((student, idx) => (
-                                                        <tr key={idx} className="border-t border-gray-200 hover:bg-gray-50">
-                                                            <td className="px-4 py-3 text-sm text-gray-900">{student.name}</td>
-                                                            <td className="px-4 py-3">
-                                                                <span className="px-3 py-1 rounded-full text-sm font-medium text-white" style={{ backgroundColor: CATEGORY_COLORS[category] }}>
-                                                                    {student.grade}
-                                                                </span>
-                                                            </td>
-                                                            <td className="px-4 py-3 text-sm text-gray-900">{student.mark}</td>
-                                                            <td className="px-4 py-3 text-sm text-gray-900">{student.class}</td>
-                                                            <td className="px-4 py-3 text-sm text-gray-900">{student.school}</td>
-                                                        </tr>
-                                                    ))}
-                                                </tbody>
-                                            </table>
-                                        </div>
-                                    </div>
-                                )
-                            ))}
-                        </>
-                    )}
-
-                    {selectedSource && filteredStudents.length === 0 && (
-                        <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-12 text-center">
-                            <div className="text-6xl mb-4">🔍</div>
-                            <h3 className="text-xl font-bold text-gray-900 mb-2">No Students Found</h3>
-                            <p className="text-gray-600">Try adjusting your filters</p>
-                        </div>
-                    )}
-                </div>
-            );
-        };
-
-        // SWOT Tab
-        const SWOTTab = () => {
-            const [swotData, setSwotData] = useState({
-                strengths: [],
-                weaknesses: [],
-                opportunities: [],
-                threats: []
-            });
-
-            useEffect(() => {
-                const { onSnapshot, collection } = window.firebaseModules;
-                const unsubscribes = ['strengths', 'weaknesses', 'opportunities', 'threats'].map(category => {
-                    return onSnapshot(collection(window.firebaseDb, 'swot', category, 'items'), (snapshot) => {
-                        const items = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-                        setSwotData(prev => ({ ...prev, [category]: items }));
-                    });
-                });
-
-                return () => unsubscribes.forEach(unsub => unsub());
-            }, []);
-
-            const addItem = async (category) => {
-                const { addDoc, collection } = window.firebaseModules;
-                await addDoc(collection(window.firebaseDb, 'swot', category, 'items'), {
-                    text: '',
-                    userId: window.firebaseAuth.currentUser?.uid || 'anonymous',
-                    createdAt: new Date().toISOString()
-                });
-            };
-
-            const updateItem = async (category, itemId, text) => {
-                const { updateDoc, doc } = window.firebaseModules;
-                await updateDoc(doc(window.firebaseDb, 'swot', category, 'items', itemId), { text });
-            };
-
-            const deleteItem = async (category, itemId) => {
-                const { deleteDoc, doc } = window.firebaseModules;
-                await deleteDoc(doc(window.firebaseDb, 'swot', category, 'items', itemId));
-            };
-
-            const categories = [
-                { key: 'strengths', label: 'Strengths', icon: '💪', color: 'green' },
-                { key: 'weaknesses', label: 'Weaknesses', icon: '⚠️', color: 'red' },
-                { key: 'opportunities', label: 'Opportunities', icon: '🌟', color: 'blue' },
-                { key: 'threats', label: 'Threats', icon: '⚡', color: 'orange' }
-            ];
-
-            return (
-                <div className="space-y-6 fade-in">
-                    <h2 className="text-2xl font-bold text-gray-900">SWOT Analysis</h2>
-                    <div className="grid grid-cols-2 gap-6">
-                        {categories.map(cat => (
-                            <div key={cat.key} className="bg-white rounded-xl shadow-sm border border-gray-200 p-6">
-                                <div className="flex justify-between items-center mb-4">
-                                    <h3 className="text-lg font-bold text-gray-900 flex items-center space-x-2">
-                                        <span>{cat.icon}</span>
-                                        <span>{cat.label}</span>
-                                    </h3>
-                                    <button
-                                        onClick={() => addItem(cat.key)}
-                                        className={`px-4 py-2 bg-${cat.color}-600 text-white rounded-lg hover:bg-${cat.color}-700 text-sm`}
-                                        style={{ backgroundColor: cat.color === 'green' ? '#16a34a' : cat.color === 'red' ? '#dc2626' : cat.color === 'blue' ? '#2563eb' : '#ea580c' }}
-                                    >
-                                        + Add
-                                    </button>
-                                </div>
-                                <div className="space-y-3">
-                                    {swotData[cat.key].map(item => (
-                                        <div key={item.id} className="flex space-x-2">
-                                            <textarea
-                                                value={item.text}
-                                                onChange={(e) => updateItem(cat.key, item.id, e.target.value)}
-                                                className="flex-1 px-4 py-2 border border-gray-300 rounded-lg resize-none"
-                                                rows="2"
-                                                placeholder={`Enter ${cat.label.toLowerCase()}...`}
-                                            />
-                                            <button
-                                                onClick={() => deleteItem(cat.key, item.id)}
-                                                className="px-3 py-2 text-red-600 hover:bg-red-50 rounded-lg"
-                                            >
-                                                🗑️
-                                            </button>
-                                        </div>
-                                    ))}
-                                    {swotData[cat.key].length === 0 && (
-                                        <p className="text-gray-400 text-sm text-center py-4">No items yet. Click "Add" to create one.</p>
-                                    )}
-                                </div>
-                            </div>
-                        ))}
-                    </div>
-                </div>
-            );
-        };
-
-        // Interventions Tab
-        const InterventionsTab = ({ sources }) => {
-            const [selectedSource, setSelectedSource] = useState('');
-            const [interventions, setInterventions] = useState({});
-
-            const currentSource = sources.find(s => s.id === selectedSource);
-            const students = currentSource?.students || [];
-
-            const studentsByCategory = Object.entries(GRADE_CATEGORIES).reduce((acc, [grade, category]) => {
-                if (!acc[category]) acc[category] = [];
-                const studentsInGrade = students.filter(s => s.grade === grade);
-                acc[category].push(...studentsInGrade);
-                return acc;
-            }, {});
-
-            useEffect(() => {
-                if (!selectedSource) return;
-                const { onSnapshot, collection } = window.firebaseModules;
-                const unsubscribe = onSnapshot(collection(window.firebaseDb, 'interventions', selectedSource, 'items'), (snapshot) => {
-                    const data = {};
-                    snapshot.docs.forEach(doc => {
-                        data[doc.id] = doc.data().text || '';
-                    });
-                    setInterventions(data);
-                });
-                return () => unsubscribe();
-            }, [selectedSource]);
-
-            const updateIntervention = async (category, text) => {
-                if (!selectedSource) return;
-                const { setDoc, doc } = window.firebaseModules;
-                await setDoc(doc(window.firebaseDb, 'interventions', selectedSource, 'items', category), {
-                    text,
-                    userId: window.firebaseAuth.currentUser?.uid || 'anonymous',
-                    updatedAt: new Date().toISOString()
-                });
-            };
-
-            const exportCategory = (category) => {
-                const categoryStudents = studentsByCategory[category] || [];
-                const ws = XLSX.utils.json_to_sheet(categoryStudents);
-                const wb = XLSX.utils.book_new();
-                XLSX.utils.book_append_sheet(wb, ws, category);
-                XLSX.writeFile(wb, `${category}_students.xlsx`);
-            };
-
-            return (
-                <div className="space-y-6 fade-in">
-                    <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-6">
-                        <label className="block text-sm font-medium text-gray-700 mb-2">Select Source</label>
-                        <select 
-                            value={selectedSource}
-                            onChange={(e) => setSelectedSource(e.target.value)}
-                            className="w-full px-4 py-2 border border-gray-300 rounded-lg"
-                        >
-                            <option value="">Choose a source...</option>
-                            {sources.map(s => (
-                                <option key={s.id} value={s.id}>{s.name}</option>
-                            ))}
-                        </select>
-                    </div>
-
-                    {selectedSource && (
-                        <div className="space-y-6">
-                            {Object.entries(studentsByCategory).map(([category, categoryStudents]) => (
-                                categoryStudents.length > 0 && (
-                                    <div key={category} className="bg-white rounded-xl shadow-sm border border-gray-200 p-6">
-                                        <div className="flex justify-between items-center mb-4">
-                                            <h3 className="text-lg font-bold" style={{ color: CATEGORY_COLORS[category] }}>
-                                                {category.charAt(0).toUpperCase() + category.slice(1)} ({categoryStudents.length} students)
-                                            </h3>
-                                            <button
-                                                onClick={() => exportCategory(category)}
-                                                className="px-4 py-2 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700"
-                                            >
-                                                📥 Export
-                                            </button>
-                                        </div>
-                                        <div className="mb-4">
-                                            <label className="block text-sm font-medium text-gray-700 mb-2">Intervention Plan</label>
-                                            <textarea
-                                                value={interventions[category] || ''}
-                                                onChange={(e) => updateIntervention(category, e.target.value)}
-                                                className="w-full px-4 py-3 border border-gray-300 rounded-lg resize-none"
-                                                rows="4"
-                                                placeholder={`Enter intervention strategies for ${category} students...`}
-                                            />
-                                        </div>
-                                        <div className="bg-gray-50 rounded-lg p-4 max-h-60 overflow-y-auto">
-                                            <h4 className="text-sm font-medium text-gray-700 mb-2">Student List:</h4>
-                                            <div className="space-y-1">
-                                                {categoryStudents.map((student, idx) => (
-                                                    <div key={idx} className="text-sm text-gray-600 flex justify-between">
-                                                        <span>{student.name}</span>
-                                                        <span className="text-gray-400">{student.grade} • {student.class}</span>
-                                                    </div>
-                                                ))}
-                                            </div>
-                                        </div>
-                                    </div>
-                                )
-                            ))}
-                        </div>
-                    )}
-                </div>
-            );
-        };
-
-        // Settings Tab
-        const SettingsTab = () => {
-            return (
-                <div className="space-y-6 fade-in">
-                    <h2 className="text-2xl font-bold text-gray-900">Settings</h2>
-                    <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-6">
-                        <h3 className="text-lg font-bold text-gray-900 mb-4">Firebase Configuration</h3>
-                        <p className="text-gray-600 mb-4">Update your Firebase credentials in the HTML file head section.</p>
-                        <div className="bg-gray-50 rounded-lg p-4">
-                            <code className="text-sm text-gray-800">
-                                Replace the firebaseConfig object with your project credentials from Firebase Console.
-                            </code>
-                        </div>
-                    </div>
-                    <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-6">
-                        <h3 className="text-lg font-bold text-gray-900 mb-4">About</h3>
-                        <p className="text-gray-600">R.E.A.D Analytics Dashboard v1.0</p>
-                        <p className="text-gray-600">Built with React, Firebase, Tailwind CSS, and Recharts</p>
-                    </div>
-                </div>
-            );
-        };
-
-        // Main App Component
-        const App = () => {
-            const [activeTab, setActiveTab] = useState('dashboard');
-            const [sources, setSources] = useState([]);
-            const [loading, setLoading] = useState(true);
-
-            useEffect(() => {
-                const { onSnapshot, collection, query, orderBy } = window.firebaseModules;
-                const q = query(collection(window.firebaseDb, 'sources'), orderBy('createdAt', 'desc'));
-                const unsubscribe = onSnapshot(q, (snapshot) => {
-                    const sourcesData = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-                    setSources(sourcesData);
-                    setLoading(false);
-                });
-                return () => unsubscribe();
-            }, []);
-
-            const refreshSources = () => {
-                // Data will automatically refresh via onSnapshot
-            };
-
-            if (loading) {
-                return (
-                    <div className="h-full flex items-center justify-center bg-gray-50">
-                        <div className="text-center">
-                            <div className="text-6xl mb-4">⏳</div>
-                            <div className="text-xl font-bold text-gray-900">Loading Dashboard...</div>
-                        </div>
-                    </div>
-                );
-            }
-
-            return (
-                <div className="flex h-full">
-                    <Sidebar activeTab={activeTab} setActiveTab={setActiveTab} />
-                    <main className="flex-1 overflow-y-auto bg-gray-50 p-8">
-                        {activeTab === 'dashboard' && <DashboardTab sources={sources} />}
-                        {activeTab === 'data' && <DataTab sources={sources} onRefresh={refreshSources} />}
-                        {activeTab === 'analysis' && <AnalysisTab sources={sources} />}
-                        {activeTab === 'swot' && <SWOTTab />}
-                        {activeTab === 'interventions' && <InterventionsTab sources={sources} />}
-                        {activeTab === 'settings' && <SettingsTab />}
-                    </main>
-                </div>
-            );
-        };
-
-        // Render the app
-        const root = ReactDOM.createRoot(document.getElementById('root'));
-        root.render(<App />);
-    </script>
- <script>(function(){function c(){var b=a.contentDocument||a.contentWindow.document;if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'9aba6eac143ecf0c',t:'MTc2NTM0NTQ4Ny4wMDAwMDA='};var a=document.createElement('script');a.nonce='';a.src='/cdn-cgi/challenge-platform/scripts/jsd/main.js';document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script></body>
+  </script>
+</body>
 </html>
