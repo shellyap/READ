@@ -110,21 +110,27 @@
 
     <div id="welcome-screen" class="fixed inset-0 z-[100] flex flex-col items-center justify-center bg-slate-900 bg-opacity-95 backdrop-blur-xl transition-opacity duration-700">
         <div class="text-center p-8 glass-panel rounded-3xl max-w-2xl mx-4">
-            <i class="fa-solid fa-book-open-reader text-6xl text-yellow-400 mb-6"></i>
-            <h2 class="text-xl md:text-2xl font-light mb-2 text-yellow-300 tracking-widest">KERTAS CADANGAN</h2>
+            <img src="https://i.postimg.cc/bSGbKpX4/logo.png" onerror="this.onerror=null; this.src='logo.png';" alt="Mahabbah Logo" class="w-full max-w-lg mx-auto mb-6 object-contain drop-shadow-2xl">
+            <h2 class="text-xl md:text-2xl font-light mb-2 text-yellow-300 tracking-widest">INFOBOARD</h2>
             <h1 class="text-3xl md:text-5xl font-bold mb-4 font-amiri leading-tight">KARNIVAL MAHABBAH PENDIDIKAN KHAS<br>PERINGKAT NEGERI SABAH TAHUN 2026</h1>
             <p class="text-sm md:text-base mb-8 text-gray-300 uppercase tracking-wide">
                 Anjuran: Sektor Pendidikan Khas, Jabatan Pendidikan Negeri Sabah<br>
                 Dengan Kerjasama: Pejabat Pendidikan Daerah Ranau
             </p>
             <button id="enter-btn" class="pulse-btn bg-yellow-500 hover:bg-yellow-400 text-slate-900 font-bold py-3 px-8 rounded-full text-lg transition-colors">
-                <i class="fa-solid fa-folder-open mr-2"></i> Buka Kertas Cadangan
+                <i class="fa-solid fa-folder-open mr-2"></i> Click to Enter
             </button>
             <p class="mt-6 text-xs text-slate-400 italic font-light max-w-md mx-auto">
-                *Sila klik untuk pengalaman interaktif bermuzik. Dirujuk verbatim dari: KERTAS CADANGAN KARNIVAL MAHABBAH NEGERI SABAH 2026 (edit 0309).docx
+                *Sila klik untuk pengalaman interaktif.
             </p>
         </div>
     </div>
+
+    <!-- AUDIO ELEMENT -->
+    <audio id="bg-music" loop preload="auto">
+        <source src="mp3.mp4" type="audio/mp4">
+        Your browser does not support the audio element.
+    </audio>
 
     <aside id="sidebar" class="w-72 h-screen glass-panel flex-shrink-0 border-r border-white/10 flex flex-col transition-transform transform -translate-x-full md:translate-x-0 absolute md:relative z-50">
         <div class="p-6 border-b border-white/10 flex items-center justify-between">
@@ -1083,77 +1089,76 @@
             sidebar.classList.add('-translate-x-full');
         });
 
-        // Tone.js Music Generation
+        // Audio Player Logic
         let isAudioPlaying = false;
-        let tonePart;
-        let synth;
+        const bgMusic = document.getElementById('bg-music');
+        let playPromise;
+        
+        // Lower the volume slightly for background listening
+        bgMusic.volume = 0.4; 
 
-        async function initAudioEngine() {
-            await Tone.start();
-            
-            synth = new Tone.PolySynth(Tone.Synth, {
-                oscillator: { type: "sine" },
-                envelope: { attack: 0.5, decay: 1.0, sustain: 0.5, release: 2.0 }
-            }).toDestination();
-            
-            const reverb = new Tone.Reverb({ decay: 4, preDelay: 0.1 }).toDestination();
-            synth.connect(reverb);
-            synth.volume.value = -12; 
+        function updateAudioUI() {
+            const toggleMusicBtn = document.getElementById('toggle-music');
+            if (!isAudioPlaying) {
+                toggleMusicBtn.innerHTML = '<i class="fa-solid fa-volume-mute text-gray-400 mr-2"></i> Audio Dihentikan';
+            } else {
+                toggleMusicBtn.innerHTML = '<i class="fa-solid fa-volume-up text-yellow-400 mr-2"></i> Audio Dimainkan';
+            }
+        }
 
-            // Nasyid-inspired chord progression
-            const melody = [
-                { time: "0:0", note: ["C4", "F4", "A4"], dur: "2n" },
-                { time: "0:2", note: ["C4", "E4", "G4"], dur: "2n" },
-                { time: "1:0", note: ["D4", "F4", "A4"], dur: "2n" },
-                { time: "1:2", note: ["C4", "E4", "G4"], dur: "2n" },
-                { time: "2:0", note: ["A3", "C4", "E4"], dur: "2n" },
-                { time: "2:2", note: ["G3", "B3", "D4"], dur: "2n" },
-                { time: "3:0", note: ["C4", "F4", "A4"], dur: "1n" },
-            ];
+        function safePlay() {
+            playPromise = bgMusic.play();
+            if (playPromise !== undefined) {
+                playPromise.then(() => {
+                    isAudioPlaying = true;
+                    updateAudioUI();
+                }).catch(err => {
+                    console.error("Audio engine failed to start or was blocked:", err);
+                    isAudioPlaying = false;
+                    updateAudioUI();
+                });
+            }
+        }
 
-            tonePart = new Tone.Part((time, value) => {
-                synth.triggerAttackRelease(value.note, value.dur, time);
-            }, melody).start(0);
-            
-            tonePart.loop = true;
-            tonePart.loopEnd = "4m";
-
-            Tone.Transport.bpm.value = 75;
-            Tone.Transport.start();
-            isAudioPlaying = true;
+        function safePause() {
+            if (playPromise !== undefined) {
+                playPromise.then(() => {
+                    bgMusic.pause();
+                    isAudioPlaying = false;
+                    updateAudioUI();
+                }).catch(err => {
+                    console.error("Pause interrupted:", err);
+                });
+            } else {
+                bgMusic.pause();
+                isAudioPlaying = false;
+                updateAudioUI();
+            }
         }
 
         // Handle Enter Button
-        document.getElementById('enter-btn').addEventListener('click', async () => {
+        document.getElementById('enter-btn').addEventListener('click', () => {
             const welcomeScreen = document.getElementById('welcome-screen');
             welcomeScreen.style.opacity = '0';
+            
+            // Prevent double-clicking
+            document.getElementById('enter-btn').style.pointerEvents = 'none';
+
             setTimeout(() => {
                 welcomeScreen.style.display = 'none';
             }, 700);
 
-            try {
-                await initAudioEngine();
-            } catch (err) {
-                console.error("Audio engine failed to start:", err);
-            }
+            safePlay();
         });
 
         // Handle Music Toggle
         const toggleMusicBtn = document.getElementById('toggle-music');
         toggleMusicBtn.addEventListener('click', () => {
-            const icon = toggleMusicBtn.querySelector('i');
             if (isAudioPlaying) {
-                Tone.Transport.pause();
-                icon.classList.remove('fa-volume-up', 'text-yellow-400');
-                icon.classList.add('fa-volume-mute', 'text-gray-400');
-                toggleMusicBtn.innerHTML = '<i class="fa-solid fa-volume-mute text-gray-400 mr-2"></i> Audio Dihentikan';
+                safePause();
             } else {
-                Tone.Transport.start();
-                icon.classList.remove('fa-volume-mute', 'text-gray-400');
-                icon.classList.add('fa-volume-up', 'text-yellow-400');
-                toggleMusicBtn.innerHTML = '<i class="fa-solid fa-volume-up text-yellow-400 mr-2"></i> Audio Dimainkan';
+                safePlay();
             }
-            isAudioPlaying = !isAudioPlaying;
         });
     </script>
 </body>
